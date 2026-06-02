@@ -1,0 +1,35 @@
+# Compiled binaries (root-level, anchored so cmd/ subdirs are not excluded)
+bin/
+/mcp-runtime
+/shadow-compare
+
+# Test coverage
+coverage*.out
+
+# Environment files (never commit real values)
+*.env
+.env
+!*.env.example
+
+# Runtime data — never commit
+logs/
+reports/
+audit*.jsonl
+tokens*.json
+*.db
+*.sqlite
+
+# Temporary files
+tmp/
+backups/
+
+# Editor / tooling
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

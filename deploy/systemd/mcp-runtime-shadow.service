@@ -1,0 +1,37 @@
+[Unit]
+Description=MCP Runtime Go Shadow Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcp-runtime
+Group=mcp-runtime
+EnvironmentFile=/etc/mcp-runtime-go/mcp-runtime-shadow.env
+ExecStart=/usr/local/bin/mcp-runtime
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectHostname=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/mcp-runtime-go /var/log/mcp-runtime-go
+RuntimeDirectory=mcp-runtime-go
+StateDirectory=mcp-runtime-go
+LogsDirectory=mcp-runtime-go
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
