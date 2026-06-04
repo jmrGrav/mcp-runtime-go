@@ -55,3 +55,29 @@ func GetRequestInfo(r *http.Request, trustedProxies []string) *RequestInfo {
 
 	return &RequestInfo{SourceIP: host}
 }
+
+// IsIPAllowed checks if the given IP string is allowed by the provided CIDR list.
+func IsIPAllowed(ipStr string, allowedCIDRs []string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+
+	for _, cidr := range allowedCIDRs {
+		if !strings.Contains(cidr, "/") {
+			// Handle plain IP addresses in the allowed list
+			allowedIP := net.ParseIP(cidr)
+			if allowedIP != nil && allowedIP.Equal(ip) {
+				return true
+			}
+			continue
+		}
+
+		_, subnet, err := net.ParseCIDR(cidr)
+		if err == nil && subnet.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}

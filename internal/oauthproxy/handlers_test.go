@@ -26,8 +26,9 @@ func setupTestService(t *testing.T) (*Service, *config.Config) {
 			ProxyBaseURL:   "http://proxy",
 			AuthCodeTTL:    300,
 			AccessTokenTTL: 3600,
-			MandatoryPKCE:  true,
-			TrustedProxies: []string{"127.0.0.1"},
+			MandatoryPKCE:         true,
+			TrustedProxies:        []string{"127.0.0.1"},
+			TrustedAuthorizeCIDRs: []string{"127.0.0.1/32", "::1/128"},
 		},
 	}
 	audit := observability.NewAuditLogger(auditPath)
@@ -161,6 +162,7 @@ func TestHandleAuthorize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/authorize?"+tt.query.Encode(), nil)
+			req.RemoteAddr = "127.0.0.1:1234"
 			rr := httptest.NewRecorder()
 			s.HandleAuthorize(rr, req)
 
@@ -296,4 +298,63 @@ func TestHandleToken_ClientAuth(t *testing.T) {
 			t.Errorf("expected 401, got %d", rr.Code)
 		}
 	})
+}
+
+func TestHandleAuthorize_CIDR(t *testing.T) {
+	s, cfg := setupTestService(t)
+	cfg.OAuthProxy.TrustedAuthorizeCIDRs = []string{"192.168.1.0/24"}
+
+	tests := []struct {
+		name     string
+		sourceIP string
+		expected int
+	}{
+		{"Allowed IP", "192.168.1.5", http.StatusFound},
+		{"Forbidden IP", "10.0.0.1", http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := url.Values{
+				"response_type":         {"code"},
+				"client_id":             {cfg.OAuthProxy.ClientID},
+				"redirect_uri":          {"https://claude.ai/callback"},
+				"state":                 {"test-state"},
+				"code_challenge":        {"JBbiqONGWPaAmwXk_8bT6UnlPfrn65D32eZlJS-zGG0"},
+				"code_challenge_method": {"S256"},
+			}
+			req := httptest.NewRequest("GET", "/authorize?"+query.Encode(), nil)
+			req.RemoteAddr = tt.sourceIP + ":1234"
+			rr := httptest.NewRecorder()
+			s.HandleAuthorize(rr, req)
+
+			if rr.Code != tt.expected {
+				t.Errorf("%s: expected %d, got %d", tt.name, tt.expected, rr.Code)
+			}
+		})
+	}
+}
+
+func TestHandleAuthorize_CIDR_XFF(t *testing.T) {
+	s, cfg := setupTestService(t)
+	cfg.OAuthProxy.TrustedProxies = []string{"127.0.0.1"}
+	cfg.OAuthProxy.TrustedAuthorizeCIDRs = []string{"192.168.1.0/24"}
+
+	query := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {cfg.OAuthProxy.ClientID},
+		"redirect_uri":          {"https://claude.ai/callback"},
+		"state":                 {"test-state"},
+		"code_challenge":        {"JBbiqONGWPaAmwXk_8bT6UnlPfrn65D32eZlJS-zGG0"},
+		"code_challenge_method": {"S256"},
+	}
+	req := httptest.NewRequest("GET", "/authorize?"+query.Encode(), nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "192.168.1.5")
+	rr := httptest.NewRecorder()
+
+	s.HandleAuthorize(rr, req)
+	if rr.Code != http.StatusFound {
+		t.Errorf("expected 302, got %d: %s", rr.Code, rr.Body.String())
+	}
 }

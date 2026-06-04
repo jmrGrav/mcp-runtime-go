@@ -28,6 +28,7 @@ type OAuthProxyConfig struct {
 	AuthCodeTTL             int      `env:"AUTH_CODE_TTL" envDefault:"300"`
 	AccessTokenTTL          int      `env:"ACCESS_TOKEN_TTL" envDefault:"86400"`
 	TrustedProxies          []string `env:"TRUSTED_PROXIES" envDefault:"127.0.0.1,::1"`
+	TrustedAuthorizeCIDRs   []string `env:"TRUSTED_AUTHORIZE_CIDRS" envDefault:"127.0.0.1/32,::1/128"`
 	MandatoryPKCE           bool     `env:"MANDATORY_PKCE" envDefault:"true"`
 	AllowTokenStoreRecovery bool     `env:"ALLOW_TOKEN_STORE_RECOVERY" envDefault:"false"`
 }

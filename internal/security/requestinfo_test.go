@@ -74,3 +74,28 @@ func TestGetRequestInfo(t *testing.T) {
 		})
 	}
 }
+
+func TestIsIPAllowed(t *testing.T) {
+	cidrs := []string{"127.0.0.1/32", "192.168.1.0/24", "10.0.0.5"}
+
+	tests := []struct {
+		ip      string
+		allowed bool
+	}{
+		{"127.0.0.1", true},
+		{"192.168.1.50", true},
+		{"192.168.2.1", false},
+		{"10.0.0.5", true},
+		{"10.0.0.6", false},
+		{"invalid", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			got := IsIPAllowed(tt.ip, cidrs)
+			if got != tt.allowed {
+				t.Errorf("ip %s: expected %v, got %v", tt.ip, tt.allowed, got)
+			}
+		})
+	}
+}

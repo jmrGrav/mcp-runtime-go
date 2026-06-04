@@ -76,6 +76,18 @@ func (s *Service) HandleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
+	// Defense in Depth: Go-level CIDR check for /authorize
+	info := security.GetRequestInfo(r, s.cfg.OAuthProxy.TrustedProxies)
+	if !security.IsIPAllowed(info.SourceIP, s.cfg.OAuthProxy.TrustedAuthorizeCIDRs) {
+		s.auditLog(r, "authorize_forbidden", map[string]interface{}{
+			"reason":    "ip_not_allowed",
+			"src_ip":    info.SourceIP,
+			"client_id": r.URL.Query().Get("client_id"),
+		})
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
 	q := r.URL.Query()
 
 	req := AuthorizeRequest{
