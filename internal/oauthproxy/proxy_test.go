@@ -7,11 +7,70 @@ import (
 	"mcp-runtime-go/internal/storage"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestHandleProxy_AuditLog(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted) // 202
+	}))
+	defer backend.Close()
+
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "audit.log")
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			GravMCPURL: backend.URL,
+			GravToken:  "test-token",
+			ClientID:   "hugo-mcp",
+		},
+	}
+	audit := observability.NewAuditLogger(auditPath)
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+
+	s, _ := NewService(cfg, store, audit, nil)
+	s.AddAccessToken("valid-token", time.Now().Add(1*time.Hour))
+
+	req := httptest.NewRequest("GET", "/mcp/tools", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("X-Request-ID", "test-rid")
+
+	ctx := mcpctx.WithRequestID(req.Context(), "test-rid")
+	req = req.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	s.HandleProxy(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Errorf("expected 202, got %d", rr.Code)
+	}
+
+	// Verify audit log
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("failed to read audit log: %v", err)
+	}
+	logStr := string(data)
+	if !strings.Contains(logStr, `"event":"proxy_hit"`) {
+		t.Error("audit log missing proxy_hit event")
+	}
+	if !strings.Contains(logStr, `"path":"/mcp/tools"`) {
+		t.Error("audit log missing correct path")
+	}
+	if !strings.Contains(logStr, `"status":202`) {
+		t.Error("audit log missing correct status")
+	}
+	if !strings.Contains(logStr, `"request_id":"test-rid"`) {
+		t.Error("audit log missing request_id")
+	}
+	if !strings.Contains(logStr, `"client_id":"hugo-mcp"`) {
+		t.Error("audit log missing client_id")
+	}
+}
 
 func TestHandleProxy_PathValidation(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

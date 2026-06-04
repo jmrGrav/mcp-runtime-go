@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 )
 
 var hopByHopHeaders = []string{
@@ -19,6 +20,16 @@ var hopByHopHeaders = []string{
 	"Trailer",
 	"Transfer-Encoding",
 	"Upgrade",
+}
+
+type proxyResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *proxyResponseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
 }
 
 func (s *Service) HandleProxy(w http.ResponseWriter, r *http.Request) {
@@ -97,5 +108,16 @@ func (s *Service) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	proxy.ServeHTTP(w, r)
+	start := time.Now()
+	rw := &proxyResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+	proxy.ServeHTTP(rw, r)
+	duration := time.Since(start)
+
+	s.auditLog(r, "proxy_hit", map[string]interface{}{
+		"path":        cleanPath,
+		"method":      r.Method,
+		"status":      rw.statusCode,
+		"duration_ms": duration.Milliseconds(),
+		"client_id":   s.cfg.OAuthProxy.ClientID,
+	})
 }
