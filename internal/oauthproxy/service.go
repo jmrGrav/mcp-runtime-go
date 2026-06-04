@@ -25,7 +25,7 @@ func mcpServiceURL(baseURL string) string {
 
 type Service struct {
 	cfg          *config.Config
-	store        *storage.TokenStore
+	store        storage.Store
 	audit        *observability.AuditLogger
 	authCodes    map[string]AuthCode
 	codesMu      sync.RWMutex
@@ -34,7 +34,7 @@ type Service struct {
 	httpClient   *http.Client
 }
 
-func NewService(cfg *config.Config, store *storage.TokenStore, audit *observability.AuditLogger, httpClient *http.Client) (*Service, error) {
+func NewService(cfg *config.Config, store storage.Store, audit *observability.AuditLogger, httpClient *http.Client) (*Service, error) {
 	tokens, err := store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tokens: %w", err)
