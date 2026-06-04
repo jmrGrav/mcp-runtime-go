@@ -21,6 +21,8 @@ type OAuthProxyConfig struct {
 	ClientSecret            string   `env:"CLIENT_SECRET" envAlias:"MCP_CLIENT_SECRET"`
 	ProxyBaseURL            string   `env:"PROXY_BASE_URL" envAlias:"MCP_PROXY_BASE_URL" envDefault:"https://www.arleo.eu"`
 	TokensFile              string   `env:"TOKENS_FILE" envAlias:"MCP_TOKEN_STORE" envDefault:"/opt/mcp-oauth-proxy/tokens.json"`
+	TokensDB                string   `env:"TOKENS_DB" envAlias:"MCP_TOKEN_DB" envDefault:"/opt/mcp-oauth-proxy/tokens.db"`
+	UseSQLite               bool     `env:"USE_SQLITE" envDefault:"false"`
 	AuditLogFile            string   `env:"AUDIT_LOG_FILE" envAlias:"MCP_AUDIT_LOG" envDefault:"/var/log/mcp-oauth/audit.log"`
 	MCPCACert               string   `env:"MCP_CA_CERT" envAlias:"MCP_CA_CERT"`
 	AuthCodeTTL             int      `env:"AUTH_CODE_TTL" envDefault:"300"`

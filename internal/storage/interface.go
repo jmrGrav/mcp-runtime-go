@@ -6,4 +6,6 @@ type Store interface {
 	Load() (map[string]float64, error)
 	// Save persists the provided token map.
 	Save(tokens map[string]float64) error
+	// Close releases any resources held by the store.
+	Close() error
 }

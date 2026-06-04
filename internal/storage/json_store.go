@@ -124,3 +124,8 @@ func (s *TokenStore) Save(tokens map[string]float64) error {
 
 	return nil
 }
+
+// Close is a no-op for the JSON TokenStore.
+func (s *TokenStore) Close() error {
+	return nil
+}

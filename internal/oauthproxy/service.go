@@ -285,3 +285,8 @@ func (s *Service) authenticateClient(clientID, clientSecret string) bool {
 	}
 	return subtle.ConstantTimeCompare([]byte(clientSecret), []byte(s.cfg.OAuthProxy.ClientSecret)) == 1
 }
+
+// Close closes the underlying token store.
+func (s *Service) Close() error {
+	return s.store.Close()
+}

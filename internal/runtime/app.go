@@ -50,7 +50,17 @@ func NewApp(cfg *config.Config) (*App, error) {
 
 	// Initialize components
 	audit := observability.NewAuditLogger(cfg.OAuthProxy.AuditLogFile)
-	store := storage.NewTokenStore(cfg.OAuthProxy.TokensFile, cfg.OAuthProxy.AllowTokenStoreRecovery)
+
+	var store storage.Store
+	if cfg.OAuthProxy.UseSQLite {
+		sqliteStore, err := storage.NewSQLiteStore(cfg.OAuthProxy.TokensDB)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize sqlite store: %w", err)
+		}
+		store = sqliteStore
+	} else {
+		store = storage.NewTokenStore(cfg.OAuthProxy.TokensFile, cfg.OAuthProxy.AllowTokenStoreRecovery)
+	}
 
 	oauthSvc, err := oauthproxy.NewService(cfg, store, audit, httpClient)
 	if err != nil {
@@ -97,6 +107,8 @@ func newHandler(oauthSvc *oauthproxy.Service) http.Handler {
 }
 
 func (a *App) Run() error {
+	defer a.oauth.Close()
+
 	// Start purge loop
 	go a.oauth.StartPurgeLoop()
 
