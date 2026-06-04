@@ -28,7 +28,7 @@ prior request history in the same session.
 consistent with the existing token-reuse pattern. The exact registration payloads that Claude
 sends when re-registering triggered the CRS threshold differently across IPs.
 
-**Why home IP (82.65.145.189) was never blocked:** The `$lan` nginx map includes 82.65.145.189.
+**Why home IP (<HOME_IP>) was never blocked:** The `$lan` nginx map includes <HOME_IP>.
 The CrowdSec Lua module skips all checks when `$lan == "1"`, so curl tests from the home machine
 bypass AppSec entirely and always return 201.
 

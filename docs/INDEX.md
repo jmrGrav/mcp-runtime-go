@@ -17,11 +17,16 @@
 
 | Document | Description |
 |---|---|
+| [Operations Reference](operations/OPERATIONS.md) | **Current live state**, endpoint access matrix, CrowdSec pitfall, quick diagnostics |
 | [Rollback](operations/ROLLBACK.md) | Rollback procedure for cutover reversal |
 | [Shadow Launch Checklist](operations/SHADOW_LAUNCH_CHECKLIST.md) | Pre-launch checklist for shadow deployment |
 | [Shadow Runbook](operations/SHADOW_RUNBOOK.md) | Step-by-step shadow monitoring runbook |
 
 ## Security
+
+| Document | Description |
+|---|---|
+| [Sensitive Data Audit](security/SENSITIVE_DATA_AUDIT.md) | Pre-publication + post-cutover secret scan — verdict: CLEAN AFTER ANONYMIZATION |
 
 Security-relevant design is documented inline in the source:
 - PKCE S256: `internal/security/pkce.go`
