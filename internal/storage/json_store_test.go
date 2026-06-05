@@ -61,7 +61,7 @@ func TestTokenStore_CorruptionRecovery(t *testing.T) {
 		if len(loaded) != 0 {
 			t.Errorf("expected empty map on recovery, got %d items", len(loaded))
 		}
-		
+
 		// Verify backup exists
 		files, _ := os.ReadDir(tmpDir)
 		foundBackup := false
@@ -113,9 +113,9 @@ func TestTokenStore_SaveError(t *testing.T) {
 	if err := os.Mkdir(path, 0755); err != nil {
 		t.Fatal(err)
 	}
-	
+
 	store := NewTokenStore(filepath.Join(path, "tokens.json"), false)
-	
+
 	// Make directory read-only to cause Save to fail
 	os.Chmod(path, 0555)
 	defer os.Chmod(path, 0755)
@@ -182,13 +182,13 @@ func TestTokenStore_Load_StatError(t *testing.T) {
 	os.Mkdir(subdir, 0755)
 	path := filepath.Join(subdir, "tokens.json")
 	os.WriteFile(path, []byte("{}"), 0600)
-	
+
 	store := NewTokenStore(path, false)
-	
+
 	// Make subdir unsearchable
 	os.Chmod(subdir, 0000)
 	defer os.Chmod(subdir, 0755)
-	
+
 	_, err := store.Load()
 	if err == nil {
 		t.Error("expected stat error")
@@ -199,14 +199,14 @@ func TestTokenStore_Save_ParentSyncError(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "subdir", "tokens.json")
 	store := NewTokenStore(path, false)
-	
+
 	if err := store.Save(map[string]float64{"t": 123}); err != nil {
 		t.Fatal(err)
 	}
-	
+
 	os.Chmod(filepath.Dir(path), 0000)
 	defer os.Chmod(filepath.Dir(path), 0755)
-	
+
 	err := store.Save(map[string]float64{"t": 123})
 	if err == nil {
 		t.Error("expected error when parent directory is not openable")

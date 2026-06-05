@@ -18,6 +18,18 @@ func NewAuditLogger(path string) *AuditLogger {
 	return &AuditLogger{filePath: path}
 }
 
+// Ping verifies the audit log file is writable. Returns nil if audit is disabled (empty path).
+func (a *AuditLogger) Ping() error {
+	if a.filePath == "" {
+		return nil
+	}
+	f, err := os.OpenFile(a.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 func (a *AuditLogger) LogWithIP(event string, srcIP string, r *http.Request, fields map[string]interface{}) {
 	entry := make(map[string]interface{})
 	entry["ts"] = time.Now().Format("2006-01-02T15:04:05-0700")
@@ -49,7 +61,7 @@ func (a *AuditLogger) LogWithIP(event string, srcIP string, r *http.Request, fie
 		return
 	}
 
-	f, err := os.OpenFile(a.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(a.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] audit log open failed: %v\n", err)
 		return

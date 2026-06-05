@@ -55,6 +55,7 @@ func TestNewHandler_HealthAliases(t *testing.T) {
 			ClientID:       "id",
 			ClientSecret:   "secret",
 			GravToken:      "token",
+			GravMCPURL:     "http://127.0.0.1/api/mcp",
 			TokensFile:     filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
 			TrustedProxies: []string{"127.0.0.1"},
@@ -84,6 +85,54 @@ func TestNewHandler_HealthAliases(t *testing.T) {
 			t.Fatalf("GET %s expected 200, got %d", path, resp.StatusCode)
 		}
 		resp.Body.Close()
+	}
+}
+
+func TestNewHandler_ReadyzUnready(t *testing.T) {
+	tmpDir := t.TempDir()
+	// GravMCPURL intentionally empty → Ready() returns error → /readyz must 503
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			ClientID:     "id",
+			ClientSecret: "secret",
+			GravToken:    "token",
+			GravMCPURL:   "",
+			TokensFile:   filepath.Join(tmpDir, "tokens.json"),
+			AuditLogFile: filepath.Join(tmpDir, "audit.log"),
+		},
+		Runtime: config.RuntimeConfig{
+			ListenHost: "127.0.0.1",
+			ListenPort: 0,
+		},
+	}
+	audit := observability.NewAuditLogger(cfg.OAuthProxy.AuditLogFile)
+	store := storage.NewTokenStore(cfg.OAuthProxy.TokensFile, false)
+	svc, err := oauthproxy.NewService(cfg, store, audit, nil)
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	handler := newHandler(svc)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when backend URL missing, got %d", resp.StatusCode)
+	}
+
+	// /healthz must still return 200 even when not ready
+	resp2, err := http.Get(server.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz failed: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("expected /healthz 200, got %d", resp2.StatusCode)
 	}
 }
 

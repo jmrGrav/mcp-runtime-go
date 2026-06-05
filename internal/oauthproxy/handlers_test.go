@@ -2,6 +2,7 @@ package oauthproxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"mcp-runtime-go/internal/config"
 	"mcp-runtime-go/internal/observability"
 	"mcp-runtime-go/internal/storage"
@@ -21,11 +22,11 @@ func setupTestService(t *testing.T) (*Service, *config.Config) {
 
 	cfg := &config.Config{
 		OAuthProxy: config.OAuthProxyConfig{
-			ClientID:       "test-client",
-			ClientSecret:   "test-secret",
-			ProxyBaseURL:   "http://proxy",
-			AuthCodeTTL:    300,
-			AccessTokenTTL: 3600,
+			ClientID:              "test-client",
+			ClientSecret:          "test-secret",
+			ProxyBaseURL:          "http://proxy",
+			AuthCodeTTL:           300,
+			AccessTokenTTL:        3600,
 			MandatoryPKCE:         true,
 			TrustedProxies:        []string{"127.0.0.1"},
 			TrustedAuthorizeCIDRs: []string{"127.0.0.1/32", "::1/128"},
@@ -332,6 +333,127 @@ func TestHandleAuthorize_CIDR(t *testing.T) {
 				t.Errorf("%s: expected %d, got %d", tt.name, tt.expected, rr.Code)
 			}
 		})
+	}
+}
+
+func TestHandleRegister_MethodNotAllowed(t *testing.T) {
+	s, _ := setupTestService(t)
+	for _, method := range []string{"GET", "PUT", "DELETE", "PATCH"} {
+		req := httptest.NewRequest(method, "/register", nil)
+		rr := httptest.NewRecorder()
+		s.HandleRegister(rr, req)
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /register: expected 405, got %d", method, rr.Code)
+		}
+		if rr.Header().Get("Allow") != "POST" {
+			t.Errorf("%s /register: expected Allow: POST, got %q", method, rr.Header().Get("Allow"))
+		}
+	}
+}
+
+func TestHandleToken_MethodNotAllowed(t *testing.T) {
+	s, _ := setupTestService(t)
+	for _, method := range []string{"GET", "PUT", "DELETE", "PATCH"} {
+		req := httptest.NewRequest(method, "/token", nil)
+		rr := httptest.NewRecorder()
+		s.HandleToken(rr, req)
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /token: expected 405, got %d", method, rr.Code)
+		}
+		if rr.Header().Get("Allow") != "POST" {
+			t.Errorf("%s /token: expected Allow: POST, got %q", method, rr.Header().Get("Allow"))
+		}
+	}
+}
+
+func TestHandleAuthorize_MethodNotAllowed(t *testing.T) {
+	s, cfg := setupTestService(t)
+	cfg.OAuthProxy.TrustedAuthorizeCIDRs = []string{"0.0.0.0/0", "::/0"}
+	for _, method := range []string{"POST", "PUT", "DELETE", "PATCH"} {
+		req := httptest.NewRequest(method, "/authorize", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		rr := httptest.NewRecorder()
+		s.HandleAuthorize(rr, req)
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /authorize: expected 405, got %d", method, rr.Code)
+		}
+		if rr.Header().Get("Allow") != "GET" {
+			t.Errorf("%s /authorize: expected Allow: GET, got %q", method, rr.Header().Get("Allow"))
+		}
+	}
+}
+
+func TestHandleRegister_EmptyRedirectURIs(t *testing.T) {
+	s, _ := setupTestService(t)
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{"Missing redirect_uris", `{}`},
+		{"Empty array", `{"redirect_uris": []}`},
+		{"Empty string entry", `{"redirect_uris": [""]}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/register", strings.NewReader(tt.payload))
+			rr := httptest.NewRecorder()
+			s.HandleRegister(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("%s: expected 400, got %d", tt.name, rr.Code)
+			}
+		})
+	}
+}
+
+// failSaveStore accepts Load but fails on Save, for testing fail-closed token issuance.
+type failSaveStore struct{}
+
+func (f *failSaveStore) Load() (map[string]float64, error) { return map[string]float64{}, nil }
+func (f *failSaveStore) Save(_ map[string]float64) error   { return fmt.Errorf("disk full") }
+func (f *failSaveStore) Close() error                      { return nil }
+
+func TestHandleToken_StoreFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			ClientID:       "test-client",
+			ClientSecret:   "test-secret",
+			AccessTokenTTL: 3600,
+			AuthCodeTTL:    300,
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	s, err := NewService(cfg, &failSaveStore{}, audit, nil)
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	code := "store-fail-code"
+	s.AddAuthCode(code, AuthCode{
+		RedirectURI: "https://claude.ai/callback",
+		ExpiresAt:   time.Now().Add(5 * time.Minute),
+	})
+
+	req := httptest.NewRequest("POST", "/token", strings.NewReader(url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {"test-client"},
+		"client_secret": {"test-secret"},
+		"redirect_uri":  {"https://claude.ai/callback"},
+		"code":          {code},
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	s.HandleToken(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when store fails, got %d", rr.Code)
+	}
+
+	// Token must not be in memory after a failed save
+	if s.ValidateAccessToken("any-token") {
+		t.Error("token should not be valid after store failure")
 	}
 }
 

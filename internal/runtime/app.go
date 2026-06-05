@@ -91,9 +91,17 @@ func newHandler(oauthSvc *oauthproxy.Service) http.Handler {
 	mux.HandleFunc("/token", oauthSvc.HandleToken)
 
 	// MCP Proxy
+	mux.HandleFunc("/mcp", oauthSvc.HandleProxy)
 	mux.HandleFunc("/mcp/", oauthSvc.HandleProxy)
-
 	health := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}
+	readyz := func(w http.ResponseWriter, r *http.Request) {
+		if err := oauthSvc.Ready(); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	}
@@ -101,7 +109,7 @@ func newHandler(oauthSvc *oauthproxy.Service) http.Handler {
 	// Health and readiness aliases for shadow deployment probes.
 	mux.HandleFunc("/health", health)
 	mux.HandleFunc("/healthz", health)
-	mux.HandleFunc("/readyz", health)
+	mux.HandleFunc("/readyz", readyz)
 
 	return RequestIDMiddleware(mux)
 }

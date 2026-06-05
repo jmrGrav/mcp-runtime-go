@@ -2,9 +2,9 @@ package httpserver
 
 import (
 	"context"
+	"log/slog"
 	"mcp-runtime-go/internal/config"
 	"mcp-runtime-go/internal/observability"
-	"log/slog"
 	"net/http"
 	"testing"
 	"time"
@@ -25,7 +25,7 @@ func TestServer(t *testing.T) {
 		},
 	}
 	srv := New(cfg, mux)
-	
+
 	go func() {
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 			// Cannot t.Errorf in a goroutine

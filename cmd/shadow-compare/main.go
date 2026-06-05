@@ -55,15 +55,15 @@ func runCompare(pythonLog, goLog string, allowFallback bool, window time.Duratio
 	fmt.Printf("Comparing %d Python entries with %d Go entries\n", len(pEntries), len(gEntries))
 
 	var (
-		matchedRID             int
-		matchedFallback        int
-		mismatches             int
-		unmatchedPython        int
+		matchedRID              int
+		matchedFallback         int
+		mismatches              int
+		unmatchedPython         int
 		criticalUnmatchedPython int
-		missingRID             int
-		duplicateRID           int
-		ambiguous              int
-		criticalMissing        int
+		missingRID              int
+		duplicateRID            int
+		ambiguous               int
+		criticalMissing         int
 	)
 
 	goByID := make(map[string]int)

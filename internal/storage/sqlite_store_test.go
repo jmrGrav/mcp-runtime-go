@@ -2,10 +2,10 @@ package storage
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
-	"path/filepath"
 )
 
 func TestSQLiteStore_LoadSave(t *testing.T) {

@@ -54,6 +54,11 @@ func (s *Service) HandleProtectedResourceMetadata(w http.ResponseWriter, r *http
 }
 
 func (s *Service) HandleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req RegistrationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid_request", http.StatusBadRequest)
@@ -76,6 +81,11 @@ func (s *Service) HandleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	// Defense in Depth: Go-level CIDR check for /authorize
 	info := security.GetRequestInfo(r, s.cfg.OAuthProxy.TrustedProxies)
 	if !security.IsIPAllowed(info.SourceIP, s.cfg.OAuthProxy.TrustedAuthorizeCIDRs) {
@@ -120,6 +130,11 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form data", http.StatusBadRequest)
 		return
@@ -138,10 +153,15 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.auditLog(r, "token_rejected", map[string]interface{}{"reason": err.Error()})
 		status := http.StatusBadRequest
-		if err.Error() == "client_auth_failed" {
+		switch err.Error() {
+		case "client_auth_failed":
 			status = http.StatusUnauthorized
+		case "server_error":
+			status = http.StatusInternalServerError
 		}
-		http.Error(w, err.Error(), status)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 
