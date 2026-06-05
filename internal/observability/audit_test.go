@@ -186,3 +186,54 @@ func TestAuditLogger_Ping(t *testing.T) {
 func TestInitLogger(t *testing.T) {
 	InitLogger(slog.LevelInfo)
 }
+
+func TestAuditLogger_WriteFailureIncrementsCounter(t *testing.T) {
+	// Point to an unwritable path to force an open failure.
+	before := AuditWriteFailures.Get()
+	a := NewAuditLogger("/nonexistent/path/audit.log")
+	req := httptest.NewRequest("GET", "/", nil)
+	a.LogWithIP("fail_event", "1.2.3.4", req, nil)
+
+	if AuditWriteFailures.Get() <= before {
+		t.Error("expected AuditWriteFailures counter to increment on write failure")
+	}
+}
+
+func TestLogger_DefaultNotNil(t *testing.T) {
+	// Logger must never be nil — a nil dereference would panic.
+	if Logger == nil {
+		t.Fatal("observability.Logger is nil before InitLogger — would cause nil-pointer panic")
+	}
+	// Should not panic.
+	Logger.Info("test log from default logger")
+}
+
+func TestHandleMetrics_ReturnsPrometheusFormat(t *testing.T) {
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	HandleMetrics(rr, req)
+
+	if rr.Code != 200 {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+	ct := rr.Header().Get("Content-Type")
+	if ct != "text/plain; version=0.0.4; charset=utf-8" {
+		t.Errorf("unexpected Content-Type: %q", ct)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "# HELP mcp_audit_write_failures_total") {
+		t.Error("missing mcp_audit_write_failures_total in /metrics output")
+	}
+	if !strings.Contains(body, "# TYPE mcp_audit_write_failures_total counter") {
+		t.Error("missing TYPE annotation in /metrics output")
+	}
+}
+
+func TestHandleMetrics_MethodNotAllowed(t *testing.T) {
+	req := httptest.NewRequest("POST", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	HandleMetrics(rr, req)
+	if rr.Code != 405 {
+		t.Errorf("expected 405, got %d", rr.Code)
+	}
+}

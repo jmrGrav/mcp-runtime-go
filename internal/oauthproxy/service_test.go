@@ -1,6 +1,7 @@
 package oauthproxy
 
 import (
+	"context"
 	"fmt"
 	"mcp-runtime-go/internal/config"
 	"mcp-runtime-go/internal/observability"
@@ -123,5 +124,60 @@ func TestService_PurgeExpired(t *testing.T) {
 	}
 	if !s.ValidateAccessToken("valid-token") {
 		t.Error("valid token purged")
+	}
+}
+
+// TestStartPurgeLoop_Cancellation verifies the purge goroutine exits when context is cancelled.
+func TestStartPurgeLoop_Cancellation(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			TokensFile:   filepath.Join(tmpDir, "tokens.json"),
+			AuditLogFile: filepath.Join(tmpDir, "audit.log"),
+		},
+	}
+	store := storage.NewTokenStore(cfg.OAuthProxy.TokensFile, false)
+	audit := observability.NewAuditLogger(cfg.OAuthProxy.AuditLogFile)
+	s, _ := NewService(cfg, store, audit, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.StartPurgeLoop(ctx)
+		close(done)
+	}()
+
+	cancel()
+
+	select {
+	case <-done:
+		// goroutine exited cleanly
+	case <-time.After(2 * time.Second):
+		t.Error("StartPurgeLoop did not exit after context cancellation")
+	}
+}
+
+// TestTokenPersistenceFailureMetric verifies the counter increments when store.Save fails.
+func TestTokenPersistenceFailureMetric(t *testing.T) {
+	before := observability.TokenPersistenceFailures.Get()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
+			AccessTokenTTL: 3600,
+		},
+	}
+	audit := observability.NewAuditLogger(cfg.OAuthProxy.AuditLogFile)
+	// failSaveStore defined in handlers_test.go (same package)
+	s, err := NewService(cfg, &failSaveStore{}, audit, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = s.AddAccessToken("sometoken", time.Now().Add(time.Hour))
+
+	if observability.TokenPersistenceFailures.Get() <= before {
+		t.Error("expected TokenPersistenceFailures counter to increment on save failure")
 	}
 }
