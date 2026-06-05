@@ -134,7 +134,9 @@ func (s *Service) ConsumeAuthCode(code string) (AuthCode, bool) {
 	return data, ok
 }
 
-func (s *Service) AddAccessToken(token string, expiresAt time.Time) {
+// AddAccessToken adds a token to the in-memory map and persists it.
+// Returns an error if persistence fails; on error the token is rolled back from memory.
+func (s *Service) AddAccessToken(token string, expiresAt time.Time) error {
 	hash := s.HashToken(token)
 	exp := float64(expiresAt.Unix())
 
@@ -144,8 +146,12 @@ func (s *Service) AddAccessToken(token string, expiresAt time.Time) {
 	for k, v := range s.accessTokens {
 		snapshot[k] = v
 	}
-	_ = s.store.Save(snapshot)
+	err := s.store.Save(snapshot)
+	if err != nil {
+		delete(s.accessTokens, hash)
+	}
 	s.tokensMu.Unlock()
+	return err
 }
 
 func (s *Service) ValidateAccessToken(token string) bool {
@@ -161,7 +167,13 @@ func (s *Service) ValidateAccessToken(token string) bool {
 
 // RegisterClient performs business validation and returns a registration response.
 func (s *Service) RegisterClient(req RegistrationRequest) (*RegistrationResponse, error) {
+	if len(req.RedirectURIs) == 0 {
+		return nil, fmt.Errorf("invalid_request: redirect_uris missing or empty")
+	}
 	for _, uri := range req.RedirectURIs {
+		if uri == "" {
+			return nil, fmt.Errorf("invalid_redirect_uri: empty URI")
+		}
 		if !security.IsAllowedRedirect(uri) {
 			return nil, fmt.Errorf("invalid_redirect_uri")
 		}
@@ -261,7 +273,9 @@ func (s *Service) ExchangeToken(req TokenExchangeRequest) (*TokenResponse, error
 	}
 
 	accessToken := security.GenerateRandomString(32)
-	s.AddAccessToken(accessToken, time.Now().Add(time.Duration(s.cfg.OAuthProxy.AccessTokenTTL)*time.Second))
+	if err := s.AddAccessToken(accessToken, time.Now().Add(time.Duration(s.cfg.OAuthProxy.AccessTokenTTL)*time.Second)); err != nil {
+		return nil, fmt.Errorf("server_error")
+	}
 
 	return &TokenResponse{
 		AccessToken: accessToken,
@@ -284,6 +298,23 @@ func (s *Service) authenticateClient(clientID, clientSecret string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(clientSecret), []byte(s.cfg.OAuthProxy.ClientSecret)) == 1
+}
+
+// Ready checks critical runtime dependencies and returns a non-nil error if any are unready.
+func (s *Service) Ready() error {
+	if s.cfg.OAuthProxy.ClientID == "" {
+		return fmt.Errorf("config incomplete: missing client_id")
+	}
+	if s.cfg.OAuthProxy.GravMCPURL == "" {
+		return fmt.Errorf("config incomplete: missing backend MCP URL")
+	}
+	if _, err := s.store.Load(); err != nil {
+		return fmt.Errorf("token store not ready: %w", err)
+	}
+	if err := s.audit.Ping(); err != nil {
+		return fmt.Errorf("audit writer not ready: %w", err)
+	}
+	return nil
 }
 
 // Close closes the underlying token store.

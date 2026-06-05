@@ -2,6 +2,7 @@ package security
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 )
 
@@ -13,5 +14,5 @@ func ValidatePKCE(codeChallenge, codeVerifier string) bool {
 
 	// Use RawURLEncoding to avoid padding as per RFC 7636
 	expected := base64.RawURLEncoding.EncodeToString(hashed)
-	return expected == codeChallenge
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(codeChallenge)) == 1
 }

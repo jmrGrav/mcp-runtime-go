@@ -7,7 +7,7 @@ import (
 
 func TestRequestID(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Test default
 	if id := GetRequestID(ctx); id != "missing" {
 		t.Errorf("expected 'missing' for missing request id, got %s", id)

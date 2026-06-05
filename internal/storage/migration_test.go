@@ -72,7 +72,7 @@ func TestMigrateJSONToSQLite_NotEmptyAbort(t *testing.T) {
 	if err == nil {
 		t.Error("Expected migration to fail because SQLite is not empty")
 	}
-    
+
 	// Verify JSON still exists
 	if _, err := os.Stat(jsonPath); os.IsNotExist(err) {
 		t.Error("tokens.json should still exist after aborted migration")

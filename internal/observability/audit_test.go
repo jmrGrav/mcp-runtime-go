@@ -141,6 +141,48 @@ func TestAuditLogger_NoRequest(t *testing.T) {
 	}
 }
 
+func TestAuditLogger_FilePermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "audit.log")
+	logger := NewAuditLogger(logPath)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	logger.LogWithIP("perm_test", "1.2.3.4", req, nil)
+
+	info, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatalf("failed to stat audit log: %v", err)
+	}
+	mode := info.Mode().Perm()
+	if mode != 0600 {
+		t.Errorf("expected audit log permissions 0600, got %04o", mode)
+	}
+}
+
+func TestAuditLogger_Ping(t *testing.T) {
+	t.Run("Empty path returns nil", func(t *testing.T) {
+		a := NewAuditLogger("")
+		if err := a.Ping(); err != nil {
+			t.Errorf("Ping with empty path should return nil, got %v", err)
+		}
+	})
+
+	t.Run("Valid path succeeds", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		a := NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+		if err := a.Ping(); err != nil {
+			t.Errorf("Ping failed: %v", err)
+		}
+	})
+
+	t.Run("Invalid path fails", func(t *testing.T) {
+		a := NewAuditLogger("/nonexistent/path/audit.log")
+		if err := a.Ping(); err == nil {
+			t.Error("expected Ping to fail for non-existent directory")
+		}
+	})
+}
+
 func TestInitLogger(t *testing.T) {
 	InitLogger(slog.LevelInfo)
 }
