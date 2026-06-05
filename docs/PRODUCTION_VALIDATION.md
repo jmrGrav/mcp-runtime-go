@@ -1,6 +1,6 @@
 # Production Validation Report — mcp-runtime-go
 
-**Date:** 2026-06-04
+**Date:** 2026-06-05 (updated — v1.1 deployed)
 **Status:** **PRODUCTION READY**
 **Verdict:** SUCCESSFUL MIGRATION & CLAUDE.AI CONNECTION
 
@@ -12,11 +12,14 @@ The migration from the Python-based OAuth proxy to the Go `mcp-runtime` is compl
 
 | Metric | Result |
 |---|---|
-| Service Type | Go (mcp-runtime) |
+| Service Type | Go (mcp-runtime) v1.1 |
 | Authoritative Port | 8086 |
 | Python Service | Stopped (Fallback available) |
 | WAF Status | Active (CrowdSec AppSec with MCP tuning) |
 | Claude.ai Connectivity | **Verified (Full Flow)** |
+| Token Storage | SQLite WAL (v1.1) |
+| Audit Coverage | Full — OAuth + MCP proxy hits (v1.1) |
+| Runtime Uptime | 2+ days, zero crashes |
 
 ---
 
@@ -85,14 +88,28 @@ The Python service remains installed and can be reactivated in < 60 seconds:
 3. Start Python: `sudo systemctl start hugo-mcp-proxy.service`
 
 ### 4.3. Known Limitations
-- **Audit Coverage:** Successful MCP tool calls (`/mcp/` proxying) are currently not audited in the Go `audit.jsonl` file (only errors and authentication events are logged). This is a known parity gap compared to the Python implementation.
+- **Single static `client_id`:** All Claude.ai sessions share one client ID (`hugo-mcp`). There is no per-user session tracking at the OAuth layer. Acceptable for single-tenant use.
+- **`/authorize` owner-only:** Intentional design decision — prevents other Claude.ai accounts from connecting. See `docs/operations/OPERATIONS.md`.
+- **Fallback shadow comparison:** Historical 24h shadow comparison used time+IP matching (`--allow-unsafe-fallback`) rather than shared request IDs. Documented in PHASE3_6 reports.
+
+*Note: Audit coverage (proxy_hit events) and token store (SQLite WAL) were known limitations at initial cutover. Both were resolved in v1.1 (2026-06-04).*
 
 ---
 
 ## 5. Future Roadmap
-1. **Audit Parity:** Implement `proxy_hit` logging in `HandleProxy` to match Python's observability level.
-2. **Persistent Storage:** Migrate from JSON-based `tokens.json` to SQLite for better concurrency and durability.
-3. **Internal Metrics:** Add Prometheus-compatible metrics for request counts and latency.
+
+**Completed (v1.1, 2026-06-04):**
+- ✅ `proxy_hit` audit events — full MCP call observability
+- ✅ SQLite WAL token store — concurrent, durable, decoupled from request path
+- ✅ Storage interface abstraction (`storage.Store`) — enables future backends
+- ✅ Migration engine — safe JSON → SQLite data migration
+- ✅ Go-level CIDR validation for `/authorize` (defense in depth)
+
+**Remaining:**
+- [ ] Tag `v1.1.0` release on GitHub
+- [ ] Hugo MCP second domain (`internal/hugomcp`)
+- [ ] Prometheus metrics endpoint
+- [ ] Shared OpenResty correlation ID for future shadow deployments
 
 ---
 
