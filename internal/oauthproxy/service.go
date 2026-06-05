@@ -1,6 +1,7 @@
 package oauthproxy
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -10,6 +11,8 @@ import (
 	"mcp-runtime-go/internal/security"
 	"mcp-runtime-go/internal/storage"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -18,6 +21,9 @@ const (
 	mcpBasePath = "/mcp"
 	mcpScope    = "mcp"
 )
+
+// subPathContextKey is a typed context key for the per-request MCP sub-path.
+type subPathContextKey struct{}
 
 func mcpServiceURL(baseURL string) string {
 	return fmt.Sprintf("%s%s", baseURL, mcpBasePath)
@@ -32,6 +38,8 @@ type Service struct {
 	accessTokens map[string]float64
 	tokensMu     sync.RWMutex
 	httpClient   *http.Client
+	backendURL   *url.URL
+	proxy        *httputil.ReverseProxy
 }
 
 func NewService(cfg *config.Config, store storage.Store, audit *observability.AuditLogger, httpClient *http.Client) (*Service, error) {
@@ -44,14 +52,26 @@ func NewService(cfg *config.Config, store storage.Store, audit *observability.Au
 		httpClient = http.DefaultClient
 	}
 
-	return &Service{
+	// Pre-parse backend URL at startup to fail fast on misconfiguration.
+	var backendURL *url.URL
+	if cfg.OAuthProxy.HugoMCPURL != "" {
+		backendURL, err = url.Parse(cfg.OAuthProxy.HugoMCPURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid backend URL %q: %w", cfg.OAuthProxy.HugoMCPURL, err)
+		}
+	}
+
+	svc := &Service{
 		cfg:          cfg,
 		store:        store,
 		audit:        audit,
 		authCodes:    make(map[string]AuthCode),
 		accessTokens: tokens,
 		httpClient:   httpClient,
-	}, nil
+		backendURL:   backendURL,
+	}
+	svc.proxy = svc.buildReverseProxy()
+	return svc, nil
 }
 
 func (s *Service) HashToken(token string) string {
@@ -69,7 +89,10 @@ func (s *Service) syncTokens() {
 	}
 	s.tokensMu.RUnlock()
 
-	_ = s.store.Save(snapshot)
+	if err := s.store.Save(snapshot); err != nil {
+		observability.Logger.Error("token persistence failed during purge sync", "error", err)
+		observability.TokenPersistenceFailures.Inc()
+	}
 }
 
 func (s *Service) PurgeExpired() {
@@ -98,10 +121,18 @@ func (s *Service) PurgeExpired() {
 	}
 }
 
-func (s *Service) StartPurgeLoop() {
+// StartPurgeLoop runs the periodic expiry sweep until ctx is cancelled.
+// The caller must cancel ctx before calling Close to avoid a store write after Close.
+func (s *Service) StartPurgeLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Hour)
-	for range ticker.C {
-		s.PurgeExpired()
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.PurgeExpired()
+		}
 	}
 }
 
@@ -149,6 +180,8 @@ func (s *Service) AddAccessToken(token string, expiresAt time.Time) error {
 	err := s.store.Save(snapshot)
 	if err != nil {
 		delete(s.accessTokens, hash)
+		observability.Logger.Error("token persistence failed on issuance", "error", err)
+		observability.TokenPersistenceFailures.Inc()
 	}
 	s.tokensMu.Unlock()
 	return err
@@ -205,26 +238,26 @@ type AuthorizeRequest struct {
 // IssueAuthCode validates the request and issues a new auth code.
 func (s *Service) IssueAuthCode(req AuthorizeRequest) (string, error) {
 	if req.ResponseType != "code" {
-		return "", fmt.Errorf("unsupported response_type")
+		return "", fmt.Errorf("unsupported_response_type")
 	}
 	if subtle.ConstantTimeCompare([]byte(req.ClientID), []byte(s.cfg.OAuthProxy.ClientID)) != 1 {
-		return "", fmt.Errorf("invalid client_id")
+		return "", fmt.Errorf("unauthorized_client")
 	}
 	if !security.IsAllowedRedirect(req.RedirectURI) {
-		return "", fmt.Errorf("invalid redirect_uri")
+		return "", fmt.Errorf("invalid_redirect_uri")
 	}
 	if req.State == "" {
-		return "", fmt.Errorf("missing state parameter")
+		return "", fmt.Errorf("invalid_request: missing state parameter")
 	}
 	if req.CodeChallenge == "" && s.cfg.OAuthProxy.MandatoryPKCE {
-		return "", fmt.Errorf("pkce_mandatory")
+		return "", fmt.Errorf("invalid_request: pkce_mandatory")
 	}
 	if req.CodeChallenge != "" {
 		if req.CodeChallengeMethod != "S256" {
-			return "", fmt.Errorf("pkce_method_unsupported")
+			return "", fmt.Errorf("invalid_request: unsupported code_challenge_method")
 		}
 		if len(req.CodeChallenge) < 43 || len(req.CodeChallenge) > 128 {
-			return "", fmt.Errorf("pkce_challenge_len_invalid")
+			return "", fmt.Errorf("invalid_request: code_challenge length invalid")
 		}
 	}
 
@@ -251,24 +284,24 @@ type TokenExchangeRequest struct {
 // ExchangeToken performs client authentication, code validation, and issues an access token.
 func (s *Service) ExchangeToken(req TokenExchangeRequest) (*TokenResponse, error) {
 	if req.GrantType != "authorization_code" {
-		return nil, fmt.Errorf("unsupported grant_type")
+		return nil, fmt.Errorf("unsupported_grant_type")
 	}
 
 	if !s.authenticateClient(req.ClientID, req.ClientSecret) {
-		return nil, fmt.Errorf("client_auth_failed")
+		return nil, fmt.Errorf("invalid_client")
 	}
 
 	data, ok := s.ConsumeAuthCode(req.Code)
 	if !ok || data.ExpiresAt.Before(time.Now()) {
-		return nil, fmt.Errorf("invalid_code")
+		return nil, fmt.Errorf("invalid_grant: invalid or expired code")
 	}
 	if req.RedirectURI == "" || req.RedirectURI != data.RedirectURI {
-		return nil, fmt.Errorf("invalid_redirect_uri")
+		return nil, fmt.Errorf("invalid_grant: redirect_uri mismatch")
 	}
 
 	if data.CodeChallenge != "" {
 		if !security.ValidatePKCE(data.CodeChallenge, req.CodeVerifier) {
-			return nil, fmt.Errorf("pkce_failed")
+			return nil, fmt.Errorf("invalid_grant: pkce verification failed")
 		}
 	}
 
@@ -276,6 +309,8 @@ func (s *Service) ExchangeToken(req TokenExchangeRequest) (*TokenResponse, error
 	if err := s.AddAccessToken(accessToken, time.Now().Add(time.Duration(s.cfg.OAuthProxy.AccessTokenTTL)*time.Second)); err != nil {
 		return nil, fmt.Errorf("server_error")
 	}
+
+	observability.TokensIssuedTotal.Inc()
 
 	return &TokenResponse{
 		AccessToken: accessToken,
@@ -305,13 +340,15 @@ func (s *Service) Ready() error {
 	if s.cfg.OAuthProxy.ClientID == "" {
 		return fmt.Errorf("config incomplete: missing client_id")
 	}
-	if s.cfg.OAuthProxy.GravMCPURL == "" {
+	if s.cfg.OAuthProxy.HugoMCPURL == "" {
 		return fmt.Errorf("config incomplete: missing backend MCP URL")
 	}
 	if _, err := s.store.Load(); err != nil {
+		observability.ReadinessFailuresTotal.Inc()
 		return fmt.Errorf("token store not ready: %w", err)
 	}
 	if err := s.audit.Ping(); err != nil {
+		observability.ReadinessFailuresTotal.Inc()
 		return fmt.Errorf("audit writer not ready: %w", err)
 	}
 	return nil

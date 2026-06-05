@@ -3,16 +3,16 @@
 ## Current Go Live State
 
 Go (`mcp-runtime.service`) is authoritative for all MCP and OAuth traffic on `mcp-hugo.arleo.eu`
-as of 2026-06-03. The Python implementation (`<PYTHON_SERVICE>`) is preserved on disk as a
+as of 2026-06-03. The Python implementation (`hugo-mcp-proxy.service`) is preserved on disk as a
 rollback reference but is stopped and disabled.
 
 ### Service topology
 
 | Service | Port | State | Role |
 |---|---|---|---|
-| `mcp-runtime.service` | `<GO_PORT>` | **active/enabled** | Authoritative Go runtime |
-| `mcp-runtime-shadow.service` | 8085 | disabled | Shadow mode — no longer used |
-| `<PYTHON_SERVICE>` | 8084 | disabled | Preserved as rollback reference |
+| `mcp-runtime.service` | 8086 | **active/enabled** | Authoritative Go runtime |
+| `mcp-runtime-shadow.service` | 8085 | disabled | Shadow mode — retired 2026-06-03 |
+| `hugo-mcp-proxy.service` | 8084 | disabled | Preserved as rollback reference |
 
 ### Routing
 
@@ -20,45 +20,53 @@ rollback reference but is stopped and disabled.
 Public internet
     → Cloudflare
     → OpenResty (mcp-hugo.arleo.eu)
-    → Go mcp-runtime 127.0.0.1:<GO_PORT>
-    → Grav MCP backend (internal)
+    → Go mcp-runtime 127.0.0.1:8086
+    → Hugo MCP backend (internal)
 ```
 
 ### Endpoint access matrix
 
 | Endpoint | Who can reach it | Notes |
 |---|---|---|
-| `POST /mcp` | `<ANTHROPIC_IP_RANGE>` | Requires valid Bearer token; unauthenticated returns 401 + WWW-Authenticate |
-| `GET /.well-known/oauth-authorization-server` | `<ANTHROPIC_IP_RANGE>` + `<OPERATOR_IP>` | OAuth metadata discovery |
-| `GET /.well-known/oauth-protected-resource` | `<ANTHROPIC_IP_RANGE>` + `<OPERATOR_IP>` | Protected resource metadata |
-| `POST /register` | `<ANTHROPIC_IP_RANGE>` + `<OPERATOR_IP>` | RFC 7591 dynamic client registration — open |
-| `GET /authorize` | **`<OPERATOR_IP>` only** | Single-tenant: only the operator's browser completes login |
-| `POST /token` | `<ANTHROPIC_IP_RANGE>` | Token exchange after successful authorize |
+| `POST /mcp` | Anthropic IP ranges (see CrowdSec section) | Requires valid Bearer token; unauthenticated returns 401 + WWW-Authenticate |
+| `GET /.well-known/oauth-authorization-server` | Anthropic + operator | OAuth metadata discovery |
+| `GET /.well-known/oauth-protected-resource` | Anthropic + operator | Protected resource metadata |
+| `POST /register` | Anthropic + operator | RFC 7591 dynamic client registration — open |
+| `GET /authorize` | **Operator IP only** | Single-tenant: only the operator's browser completes login |
+| `POST /token` | Anthropic IP ranges | Token exchange after successful authorize |
+| `GET /metrics` | localhost only | Prometheus-text internal metrics (not exposed publicly) |
 
 ### Single-tenant authorization
 
-`/authorize` is restricted to `<OPERATOR_IP>` via a dedicated nginx `location = /authorize`
-block with `allow <OPERATOR_IP>; deny all;`. This means:
+`/authorize` is restricted to the operator IP via two layers:
+1. A dedicated nginx `location = /authorize` block with `allow <operator-ip>; deny all;`
+   (configured in `/usr/local/openresty/nginx/conf/sites-available/mcp-hugo.arleo.eu`).
+2. A Go-level CIDR check against `TRUSTED_AUTHORIZE_CIDRS` in the runtime env file.
 
+The operator IP is not documented here. Retrieve it from:
+```
+sudo grep TRUSTED_AUTHORIZE_CIDRS /etc/mcp-runtime/mcp-runtime.env
+```
+
+This means:
 - Any Claude.ai account can discover the MCP and register a client.
 - Only requests from the operator's IP can complete the OAuth login step.
 - Anyone else attempting to connect via Claude.ai receives 403 at the authorize step.
 
-### Rollback
+### Token storage
 
-OpenResty config backup: `<ROLLBACK_BACKUP_PATH>`
+v1.1+ uses SQLite WAL mode at `/opt/mcp-oauth-proxy/tokens.db` (configured via `TOKENS_DB`).
+The legacy JSON store (`TOKENS_FILE`) is retained for emergency rollback only. The runtime logs
+the active backend at INFO level on startup.
 
-To roll back:
-```bash
-sudo cp <ROLLBACK_BACKUP_PATH> \
-  /usr/local/openresty/nginx/conf/sites-available/mcp-hugo.arleo.eu
-sudo /usr/local/openresty/nginx/sbin/nginx -t
-sudo systemctl reload openresty
-sudo systemctl start <PYTHON_SERVICE>
-```
+---
 
-Python files are never deleted. The rollback restores traffic to the Python service without
-data loss.
+## Rollback
+
+See **[ROLLBACK_PRODUCTION.md](ROLLBACK_PRODUCTION.md)** for the current, executable rollback procedure.
+
+The `ROLLBACK.md` file in this directory describes the **historical shadow mode rollback**
+(Go shadow → Python authoritative). It is no longer applicable to the current production setup.
 
 ---
 
@@ -98,8 +106,9 @@ sudo /usr/local/openresty/nginx/sbin/nginx -t
 sudo systemctl reload openresty
 ```
 
-**Do not** add `<ANTHROPIC_IP_RANGE>` to the public config or documentation. The actual range
-is maintained in the local nginx configuration.
+**The actual Anthropic IP ranges are NOT documented here** — they are maintained in the local
+nginx configuration only (never committed to this repository). If the ranges are unknown, check
+the existing `lan.conf` file or contact Anthropic support for the current ranges.
 
 ### What NOT to do
 
@@ -116,10 +125,13 @@ is maintained in the local nginx configuration.
 
 | Log | Path | Retention |
 |---|---|---|
-| Go authoritative audit | `/var/log/mcp-runtime-go/audit.jsonl` | Permanent |
-| Go shadow audit (historical) | `/var/log/mcp-runtime-go/audit-shadow.jsonl` | Preserved |
+| Go authoritative audit | `/var/log/mcp-runtime-go/audit.jsonl` | Permanent (set up logrotate) |
+| Go shadow audit (historical) | `/var/log/mcp-runtime-go/audit-shadow.jsonl` | Preserved, no longer written |
 | OpenResty access log | `/var/log/nginx/mcp-hugo.access.log` | System rotation |
 | OpenResty error log | `/var/log/nginx/mcp-hugo.error.log` | System rotation |
+
+**Note:** The audit log is append-only with no built-in rotation. Configure logrotate for
+`/var/log/mcp-runtime-go/audit.jsonl` to prevent unbounded growth.
 
 ---
 
@@ -128,6 +140,12 @@ is maintained in the local nginx configuration.
 ```bash
 # Service health
 systemctl status mcp-runtime --no-pager
+
+# Readiness probe (503 = dependency unavailable)
+curl -s http://127.0.0.1:8086/readyz
+
+# Internal metrics (Prometheus text format)
+curl -s http://127.0.0.1:8086/metrics
 
 # Recent audit events
 sudo tail -20 /var/log/mcp-runtime-go/audit.jsonl
@@ -142,9 +160,9 @@ for l in sys.stdin:
     except: pass
 "
 
-# Check for CrowdSec blocks (LAPI layer)
+# Check for CrowdSec blocks (LAPI layer — does NOT show heuristic blocks)
 sudo cscli decisions list
 
 # Run healthcheck
-/home/jm/mcp-runtime-go/scripts/healthcheck-shadow.sh http://127.0.0.1:<GO_PORT>
+curl -s http://127.0.0.1:8086/healthz
 ```

@@ -1,8 +1,19 @@
-# Shadow Rollback
+> **HISTORICAL — SHADOW MODE ONLY**
+> This document describes how to roll back from **Go shadow → Python authoritative**.
+> Shadow mode was retired on 2026-06-03. Go is now the authoritative runtime.
+>
+> **For the current production rollback procedure**, see [ROLLBACK_PRODUCTION.md](ROLLBACK_PRODUCTION.md).
+
+---
+
+# Shadow Rollback (Historical)
 
 ## Goal
 
 Return the environment to Python-only authoritative operation without losing user service.
+
+**This procedure applies only if the Go runtime was running in shadow mode alongside
+the Python authoritative service. It is NOT applicable to the current production setup.**
 
 ## Steps
 

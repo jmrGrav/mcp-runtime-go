@@ -24,8 +24,8 @@ func TestHandleProxy_AuditLog(t *testing.T) {
 	auditPath := filepath.Join(tmpDir, "audit.log")
 	cfg := &config.Config{
 		OAuthProxy: config.OAuthProxyConfig{
-			GravMCPURL: backend.URL,
-			GravToken:  "test-token",
+			HugoMCPURL: backend.URL,
+			HugoToken:  "test-token",
 			ClientID:   "hugo-mcp",
 		},
 	}
@@ -84,8 +84,8 @@ func TestHandleProxy_PathValidation(t *testing.T) {
 
 	cfg := &config.Config{
 		OAuthProxy: config.OAuthProxyConfig{
-			GravMCPURL: backend.URL + "/api/mcp",
-			GravToken:  "test-token",
+			HugoMCPURL: backend.URL + "/api/mcp",
+			HugoToken:  "test-token",
 		},
 	}
 	audit := observability.NewAuditLogger(auditPath)
@@ -150,9 +150,9 @@ func TestHandleProxy_Security(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		OAuthProxy: config.OAuthProxyConfig{
-			GravMCPURL: backend.URL,
-			GravToken:  "test-token",
-			GravHost:   "backend-host",
+			HugoMCPURL: backend.URL,
+			HugoToken:  "test-token",
+			HugoHost:   "backend-host",
 		},
 	}
 	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))

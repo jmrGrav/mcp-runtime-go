@@ -128,6 +128,7 @@ func TestHandleAuthorize(t *testing.T) {
 			http.StatusFound,
 		},
 		{
+			// RFC 6749 §4.1.2.1: other errors redirect to redirect_uri with error param.
 			"Missing state",
 			url.Values{
 				"response_type":         {"code"},
@@ -136,9 +137,10 @@ func TestHandleAuthorize(t *testing.T) {
 				"code_challenge":        {"JBbiqONGWPaAmwXk_8bT6UnlPfrn65D32eZlJS-zGG0"},
 				"code_challenge_method": {"S256"},
 			},
-			http.StatusBadRequest,
+			http.StatusFound,
 		},
 		{
+			// RFC 6749 §4.1.2.1: other errors redirect to redirect_uri with error param.
 			"Missing PKCE when mandatory",
 			url.Values{
 				"response_type": {"code"},
@@ -146,14 +148,26 @@ func TestHandleAuthorize(t *testing.T) {
 				"redirect_uri":  {"https://claude.ai/callback"},
 				"state":         {"test-state"},
 			},
-			http.StatusBadRequest,
+			http.StatusFound,
 		},
 		{
+			// RFC 6749 §4.1.2.1: invalid client_id must NOT redirect — return error directly.
 			"Invalid client_id",
 			url.Values{
 				"response_type": {"code"},
 				"client_id":     {"wrong"},
 				"redirect_uri":  {"https://claude.ai/callback"},
+				"state":         {"test-state"},
+			},
+			http.StatusUnauthorized,
+		},
+		{
+			// RFC 6749 §4.1.2.1: invalid redirect_uri must NOT redirect — return 400 directly.
+			"Invalid redirect_uri",
+			url.Values{
+				"response_type": {"code"},
+				"client_id":     {cfg.OAuthProxy.ClientID},
+				"redirect_uri":  {"http://evil.com/cb"},
 				"state":         {"test-state"},
 			},
 			http.StatusBadRequest,
@@ -478,5 +492,142 @@ func TestHandleAuthorize_CIDR_XFF(t *testing.T) {
 	s.HandleAuthorize(rr, req)
 	if rr.Code != http.StatusFound {
 		t.Errorf("expected 302, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestHandleAuthorize_RFC6749_ErrorRedirect verifies that errors other than invalid
+// redirect_uri / unauthorized_client produce a 302 to the redirect_uri with an
+// RFC 6749 §4.1.2.1 error parameter.
+func TestHandleAuthorize_RFC6749_ErrorRedirect(t *testing.T) {
+	s, cfg := setupTestService(t)
+
+	tests := []struct {
+		name      string
+		query     url.Values
+		wantError string
+	}{
+		{
+			name: "missing state",
+			query: url.Values{
+				"response_type":         {"code"},
+				"client_id":             {cfg.OAuthProxy.ClientID},
+				"redirect_uri":          {"https://claude.ai/callback"},
+				"code_challenge":        {"JBbiqONGWPaAmwXk_8bT6UnlPfrn65D32eZlJS-zGG0"},
+				"code_challenge_method": {"S256"},
+			},
+			wantError: "invalid_request",
+		},
+		{
+			name: "pkce mandatory",
+			query: url.Values{
+				"response_type": {"code"},
+				"client_id":     {cfg.OAuthProxy.ClientID},
+				"redirect_uri":  {"https://claude.ai/callback"},
+				"state":         {"s"},
+			},
+			wantError: "invalid_request",
+		},
+		{
+			name: "unsupported response type",
+			query: url.Values{
+				"response_type": {"token"},
+				"client_id":     {cfg.OAuthProxy.ClientID},
+				"redirect_uri":  {"https://claude.ai/callback"},
+				"state":         {"s"},
+			},
+			wantError: "unsupported_response_type",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/authorize?"+tt.query.Encode(), nil)
+			req.RemoteAddr = "127.0.0.1:1234"
+			rr := httptest.NewRecorder()
+			s.HandleAuthorize(rr, req)
+
+			if rr.Code != http.StatusFound {
+				t.Errorf("expected 302 redirect, got %d: %s", rr.Code, rr.Body.String())
+				return
+			}
+			loc := rr.Header().Get("Location")
+			u, err := url.Parse(loc)
+			if err != nil {
+				t.Fatalf("invalid Location header %q: %v", loc, err)
+			}
+			if errParam := u.Query().Get("error"); errParam != tt.wantError {
+				t.Errorf("expected error=%s, got %q in Location: %s", tt.wantError, errParam, loc)
+			}
+		})
+	}
+}
+
+// TestHandleToken_RFC6749_JSONErrors verifies /token returns RFC 6749 §5.2 JSON error bodies.
+func TestHandleToken_RFC6749_JSONErrors(t *testing.T) {
+	s, cfg := setupTestService(t)
+
+	tests := []struct {
+		name      string
+		form      url.Values
+		wantCode  int
+		wantError string
+	}{
+		{
+			name: "unsupported grant type",
+			form: url.Values{
+				"grant_type":    {"implicit"},
+				"client_id":     {cfg.OAuthProxy.ClientID},
+				"client_secret": {cfg.OAuthProxy.ClientSecret},
+			},
+			wantCode:  http.StatusBadRequest,
+			wantError: "unsupported_grant_type",
+		},
+		{
+			name: "invalid client",
+			form: url.Values{
+				"grant_type":    {"authorization_code"},
+				"client_id":     {"wrong"},
+				"client_secret": {"wrong"},
+				"code":          {"x"},
+			},
+			wantCode:  http.StatusUnauthorized,
+			wantError: "invalid_client",
+		},
+		{
+			name: "invalid grant (bad code)",
+			form: url.Values{
+				"grant_type":    {"authorization_code"},
+				"client_id":     {cfg.OAuthProxy.ClientID},
+				"client_secret": {cfg.OAuthProxy.ClientSecret},
+				"redirect_uri":  {"https://claude.ai/callback"},
+				"code":          {"nonexistent"},
+			},
+			wantCode:  http.StatusBadRequest,
+			wantError: "invalid_grant",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/token", strings.NewReader(tt.form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rr := httptest.NewRecorder()
+			s.HandleToken(rr, req)
+
+			if rr.Code != tt.wantCode {
+				t.Errorf("expected %d, got %d", tt.wantCode, rr.Code)
+			}
+			ct := rr.Header().Get("Content-Type")
+			if !strings.Contains(ct, "application/json") {
+				t.Errorf("expected JSON Content-Type, got %q", ct)
+			}
+			var body map[string]string
+			if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode JSON error response: %v", err)
+			}
+			if body["error"] != tt.wantError {
+				t.Errorf("expected error=%q, got %q", tt.wantError, body["error"])
+			}
+		})
 	}
 }

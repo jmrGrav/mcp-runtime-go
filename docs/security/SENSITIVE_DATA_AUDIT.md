@@ -62,7 +62,7 @@ service. Anonymizing the docs file is sufficient.
 | `GEMINI_API_KEY` | Not found |
 | `-----BEGIN` (PEM/private key) | Not found |
 | Long hex token strings (≥40 chars outside Go BuildIDs) | Not found |
-| GRAV_TOKEN value | Not found (only referenced as env var name) |
+| HUGO_TOKEN value | Not found (only referenced as env var name) |
 | CLIENT_SECRET value | Not found (only referenced as env var name) |
 
 ---

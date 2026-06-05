@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/pem"
 	"mcp-runtime-go/internal/config"
 	"mcp-runtime-go/internal/oauthproxy"
@@ -21,7 +22,7 @@ func TestNewApp(t *testing.T) {
 		OAuthProxy: config.OAuthProxyConfig{
 			ClientID:     "id",
 			ClientSecret: "secret",
-			GravToken:    "token",
+			HugoToken:    "token",
 			TokensFile:   filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile: filepath.Join(tmpDir, "audit.log"),
 		},
@@ -48,17 +49,47 @@ func TestNewApp(t *testing.T) {
 	}
 }
 
+func newTestHandler(t *testing.T) http.Handler {
+	t.Helper()
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			ClientID:       "id",
+			ClientSecret:   "secret",
+			HugoToken:      "token",
+			HugoMCPURL:     "http://127.0.0.1/api/mcp",
+			ProxyBaseURL:   "https://example.com",
+			TokensFile:     filepath.Join(tmpDir, "tokens.json"),
+			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
+			TrustedProxies: []string{"127.0.0.1"},
+			AuthCodeTTL:    300,
+			AccessTokenTTL: 86400,
+		},
+	}
+	observability.InitLogger(0)
+	audit := observability.NewAuditLogger(cfg.OAuthProxy.AuditLogFile)
+	store := storage.NewTokenStore(cfg.OAuthProxy.TokensFile, false)
+	svc, err := oauthproxy.NewService(cfg, store, audit, nil)
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+	return newHandler(svc)
+}
+
 func TestNewHandler_HealthAliases(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		OAuthProxy: config.OAuthProxyConfig{
 			ClientID:       "id",
 			ClientSecret:   "secret",
-			GravToken:      "token",
-			GravMCPURL:     "http://127.0.0.1/api/mcp",
+			HugoToken:      "token",
+			HugoMCPURL:     "http://127.0.0.1/api/mcp",
+			ProxyBaseURL:   "https://example.com",
 			TokensFile:     filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
 			TrustedProxies: []string{"127.0.0.1"},
+			AuthCodeTTL:    300,
+			AccessTokenTTL: 86400,
 		},
 		Runtime: config.RuntimeConfig{
 			ListenHost: "127.0.0.1",
@@ -90,13 +121,13 @@ func TestNewHandler_HealthAliases(t *testing.T) {
 
 func TestNewHandler_ReadyzUnready(t *testing.T) {
 	tmpDir := t.TempDir()
-	// GravMCPURL intentionally empty → Ready() returns error → /readyz must 503
+	// HugoMCPURL intentionally empty → Ready() returns error → /readyz must 503
 	cfg := &config.Config{
 		OAuthProxy: config.OAuthProxyConfig{
 			ClientID:     "id",
 			ClientSecret: "secret",
-			GravToken:    "token",
-			GravMCPURL:   "",
+			HugoToken:    "token",
+			HugoMCPURL:   "",
 			TokensFile:   filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile: filepath.Join(tmpDir, "audit.log"),
 		},
@@ -140,11 +171,15 @@ func TestApp_Run(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		OAuthProxy: config.OAuthProxyConfig{
-			ClientID:     "id",
-			ClientSecret: "secret",
-			GravToken:    "token",
-			TokensFile:   filepath.Join(tmpDir, "tokens.json"),
-			AuditLogFile: filepath.Join(tmpDir, "audit.log"),
+			ClientID:       "id",
+			ClientSecret:   "secret",
+			HugoToken:      "token",
+			HugoMCPURL:     "http://127.0.0.1/api/mcp",
+			ProxyBaseURL:   "http://127.0.0.1",
+			TokensFile:     filepath.Join(tmpDir, "tokens.json"),
+			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
+			AuthCodeTTL:    300,
+			AccessTokenTTL: 86400,
 		},
 		Runtime: config.RuntimeConfig{
 			ListenHost: "127.0.0.1",
@@ -152,7 +187,10 @@ func TestApp_Run(t *testing.T) {
 		},
 	}
 
-	app, _ := NewApp(cfg)
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp failed: %v", err)
+	}
 
 	// Run in goroutine
 	done := make(chan error, 1)
@@ -160,10 +198,14 @@ func TestApp_Run(t *testing.T) {
 		done <- app.Run()
 	}()
 
-	// Wait for server to start
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the server to bind its listen socket (no time.Sleep).
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readyCancel()
+	if err := app.server.WaitReady(readyCtx); err != nil {
+		t.Fatalf("server did not become ready: %v", err)
+	}
 
-	// Send signal to ourselves
+	// Send SIGINT to ourselves.
 	p, _ := os.FindProcess(os.Getpid())
 	p.Signal(syscall.SIGINT)
 
@@ -172,7 +214,7 @@ func TestApp_Run(t *testing.T) {
 		if err != nil {
 			t.Errorf("App.Run failed: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Error("App.Run did not stop after SIGINT")
 	}
 }
@@ -231,4 +273,23 @@ func TestBackendVerification(t *testing.T) {
 			t.Error("expected error for untrusted cert")
 		}
 	})
+}
+
+func TestNewHandler_MetricsEndpoint(t *testing.T) {
+	handler := newTestHandler(t)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct != "text/plain; version=0.0.4; charset=utf-8" {
+		t.Errorf("unexpected Content-Type: %q", ct)
+	}
 }

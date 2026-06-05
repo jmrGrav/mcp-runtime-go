@@ -1,12 +1,15 @@
 package oauthproxy
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	mcpctx "mcp-runtime-go/internal/context"
+	"mcp-runtime-go/internal/observability"
 	"mcp-runtime-go/internal/security"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 func (s *Service) auditLog(r *http.Request, event string, fields map[string]interface{}) {
@@ -23,6 +26,11 @@ func (s *Service) auditLog(r *http.Request, event string, fields map[string]inte
 }
 
 func (s *Service) HandleMetadata(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	s.auditLog(r, "metadata_served", nil)
 	data := map[string]interface{}{
 		"issuer":                                s.cfg.OAuthProxy.ProxyBaseURL,
@@ -41,6 +49,11 @@ func (s *Service) HandleMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) HandleProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	s.auditLog(r, "resource_metadata_served", nil)
 	data := map[string]interface{}{
 		"resource":                 mcpServiceURL(s.cfg.OAuthProxy.ProxyBaseURL),
@@ -68,6 +81,7 @@ func (s *Service) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.RegisterClient(req)
 	if err != nil {
 		s.auditLog(r, "register_rejected", map[string]interface{}{"reason": err.Error()})
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "invalid_redirect_uri"})
 		return
@@ -80,12 +94,16 @@ func (s *Service) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// HandleAuthorize implements RFC 6749 §4.1.1 / §4.1.2.1 error handling:
+//   - Invalid redirect_uri or invalid client_id → direct HTTP error (no redirect).
+//   - All other errors → redirect to redirect_uri with RFC-standard error codes.
 func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
 	// Defense in Depth: Go-level CIDR check for /authorize
 	info := security.GetRequestInfo(r, s.cfg.OAuthProxy.TrustedProxies)
 	if !security.IsIPAllowed(info.SourceIP, s.cfg.OAuthProxy.TrustedAuthorizeCIDRs) {
@@ -99,12 +117,27 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
+	redirectURI := q.Get("redirect_uri")
+	clientID := q.Get("client_id")
+	state := q.Get("state")
+
+	// RFC 6749 §4.1.2.1: invalid redirect_uri or invalid client_id → must NOT redirect.
+	if !security.IsAllowedRedirect(redirectURI) {
+		s.auditLog(r, "authorize_rejected", map[string]interface{}{"reason": "invalid_redirect_uri"})
+		http.Error(w, "invalid_redirect_uri", http.StatusBadRequest)
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(clientID), []byte(s.cfg.OAuthProxy.ClientID)) != 1 {
+		s.auditLog(r, "authorize_rejected", map[string]interface{}{"reason": "unauthorized_client"})
+		http.Error(w, "unauthorized_client", http.StatusUnauthorized)
+		return
+	}
 
 	req := AuthorizeRequest{
 		ResponseType:        q.Get("response_type"),
-		ClientID:            q.Get("client_id"),
-		RedirectURI:         q.Get("redirect_uri"),
-		State:               q.Get("state"),
+		ClientID:            clientID,
+		RedirectURI:         redirectURI,
+		State:               state,
 		CodeChallenge:       q.Get("code_challenge"),
 		CodeChallengeMethod: q.Get("code_challenge_method"),
 	}
@@ -112,14 +145,24 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	code, err := s.IssueAuthCode(req)
 	if err != nil {
 		s.auditLog(r, "authorize_rejected", map[string]interface{}{"reason": err.Error()})
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// Redirect with RFC-standard error code (redirect_uri and client_id already validated).
+		rfcErr, rfcDesc := mapAuthorizeError(err)
+		params := url.Values{}
+		params.Set("error", rfcErr)
+		if rfcDesc != "" {
+			params.Set("error_description", rfcDesc)
+		}
+		if state != "" {
+			params.Set("state", state)
+		}
+		http.Redirect(w, r, redirectURI+"?"+params.Encode(), http.StatusFound)
 		return
 	}
 
 	params := url.Values{}
 	params.Add("code", code)
-	if req.State != "" {
-		params.Add("state", req.State)
+	if state != "" {
+		params.Add("state", state)
 	}
 
 	s.auditLog(r, "authorize_approved", map[string]interface{}{
@@ -129,6 +172,7 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, fmt.Sprintf("%s?%s", req.RedirectURI, params.Encode()), http.StatusFound)
 }
 
+// HandleToken implements RFC 6749 §4.1.3 / §5.2 with RFC-standard JSON error bodies.
 func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -136,7 +180,7 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form data", http.StatusBadRequest)
+		writeTokenError(w, "invalid_request", "invalid form data", http.StatusBadRequest)
 		return
 	}
 
@@ -152,16 +196,9 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.ExchangeToken(req)
 	if err != nil {
 		s.auditLog(r, "token_rejected", map[string]interface{}{"reason": err.Error()})
-		status := http.StatusBadRequest
-		switch err.Error() {
-		case "client_auth_failed":
-			status = http.StatusUnauthorized
-		case "server_error":
-			status = http.StatusInternalServerError
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		observability.TokensRejectedTotal.Inc()
+		rfcErr, status := mapTokenError(err)
+		writeTokenError(w, rfcErr, "", status)
 		return
 	}
 
@@ -184,4 +221,44 @@ func (s *Service) unauthorized(w http.ResponseWriter, detail string) {
 func (s *Service) wwwAuthenticateHeader() string {
 	return fmt.Sprintf("Bearer realm=\"%s\", resource_metadata=\"%s/.well-known/oauth-protected-resource\"",
 		s.cfg.OAuthProxy.ProxyBaseURL, s.cfg.OAuthProxy.ProxyBaseURL)
+}
+
+func writeTokenError(w http.ResponseWriter, errCode, desc string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	body := map[string]string{"error": errCode}
+	if desc != "" {
+		body["error_description"] = desc
+	}
+	json.NewEncoder(w).Encode(body)
+}
+
+// mapAuthorizeError maps internal IssueAuthCode errors to RFC 6749 §4.1.2.1 error codes.
+func mapAuthorizeError(err error) (code, description string) {
+	msg := err.Error()
+	switch {
+	case strings.HasPrefix(msg, "unsupported_response_type"):
+		return "unsupported_response_type", ""
+	case strings.HasPrefix(msg, "invalid_request"):
+		return "invalid_request", strings.TrimPrefix(msg, "invalid_request: ")
+	default:
+		return "invalid_request", msg
+	}
+}
+
+// mapTokenError maps ExchangeToken errors to RFC 6749 §5.2 error codes and HTTP status.
+func mapTokenError(err error) (code string, status int) {
+	msg := err.Error()
+	switch {
+	case strings.HasPrefix(msg, "unsupported_grant_type"):
+		return "unsupported_grant_type", http.StatusBadRequest
+	case strings.HasPrefix(msg, "invalid_client"):
+		return "invalid_client", http.StatusUnauthorized
+	case strings.HasPrefix(msg, "invalid_grant"):
+		return "invalid_grant", http.StatusBadRequest
+	case strings.HasPrefix(msg, "server_error"):
+		return "server_error", http.StatusInternalServerError
+	default:
+		return "invalid_request", http.StatusBadRequest
+	}
 }
