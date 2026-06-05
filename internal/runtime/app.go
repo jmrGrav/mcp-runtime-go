@@ -58,8 +58,11 @@ func NewApp(cfg *config.Config) (*App, error) {
 			return nil, fmt.Errorf("failed to initialize sqlite store: %w", err)
 		}
 		store = sqliteStore
+		observability.Logger.Info("token store: SQLite WAL", "path", cfg.OAuthProxy.TokensDB)
 	} else {
 		store = storage.NewTokenStore(cfg.OAuthProxy.TokensFile, cfg.OAuthProxy.AllowTokenStoreRecovery)
+		observability.Logger.Warn("token store: JSON (legacy) — set USE_SQLITE=true for production use",
+			"path", cfg.OAuthProxy.TokensFile)
 	}
 
 	oauthSvc, err := oauthproxy.NewService(cfg, store, audit, httpClient)
@@ -83,20 +86,24 @@ func newHandler(oauthSvc *oauthproxy.Service) http.Handler {
 	// OAuth Discovery
 	mux.HandleFunc("/.well-known/oauth-authorization-server", oauthSvc.HandleMetadata)
 	mux.HandleFunc("/.well-known/oauth-protected-resource", oauthSvc.HandleProtectedResourceMetadata)
-	mux.HandleFunc("/.well-known/oauth-protected-resource/", oauthSvc.HandleProtectedResourceMetadata) // Simple suffixed handler
+	mux.HandleFunc("/.well-known/oauth-protected-resource/", oauthSvc.HandleProtectedResourceMetadata)
 
 	// OAuth Endpoints
 	mux.HandleFunc("/register", oauthSvc.HandleRegister)
 	mux.HandleFunc("/authorize", oauthSvc.HandleAuthorize)
 	mux.HandleFunc("/token", oauthSvc.HandleToken)
 
-	// MCP Proxy
+	// MCP Proxy — explicit routes prevent net/http mux from 301-redirecting /mcp → /mcp/
 	mux.HandleFunc("/mcp", oauthSvc.HandleProxy)
 	mux.HandleFunc("/mcp/", oauthSvc.HandleProxy)
+
+	// Liveness probe — always 200 if the process is alive.
 	health := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	}
+
+	// Readiness probe — 503 if any critical dependency is unavailable.
 	readyz := func(w http.ResponseWriter, r *http.Request) {
 		if err := oauthSvc.Ready(); err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -106,10 +113,12 @@ func newHandler(oauthSvc *oauthproxy.Service) http.Handler {
 		w.Write([]byte("OK"))
 	}
 
-	// Health and readiness aliases for shadow deployment probes.
 	mux.HandleFunc("/health", health)
 	mux.HandleFunc("/healthz", health)
 	mux.HandleFunc("/readyz", readyz)
+
+	// Prometheus-compatible metrics endpoint.
+	mux.HandleFunc("/metrics", observability.HandleMetrics)
 
 	return RequestIDMiddleware(mux)
 }
@@ -117,8 +126,10 @@ func newHandler(oauthSvc *oauthproxy.Service) http.Handler {
 func (a *App) Run() error {
 	defer a.oauth.Close()
 
-	// Start purge loop
-	go a.oauth.StartPurgeLoop()
+	// purgeCtx is cancelled before Close() so the purge loop does not write to a closed store.
+	purgeCtx, cancelPurge := context.WithCancel(context.Background())
+	go a.oauth.StartPurgeLoop(purgeCtx)
+	defer cancelPurge()
 
 	errChan := make(chan error, 1)
 	go func() {

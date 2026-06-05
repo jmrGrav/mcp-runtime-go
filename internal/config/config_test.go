@@ -46,12 +46,61 @@ func TestValidate(t *testing.T) {
 			"Valid config",
 			Config{
 				OAuthProxy: OAuthProxyConfig{
-					ClientID:     "id",
-					ClientSecret: "secret",
-					GravToken:    "token",
+					ClientID:       "id",
+					ClientSecret:   "secret",
+					GravToken:      "token",
+					GravMCPURL:     "http://127.0.0.1/api/mcp",
+					ProxyBaseURL:   "https://example.com",
+					AuthCodeTTL:    300,
+					AccessTokenTTL: 86400,
 				},
 			},
 			false,
+		},
+		{
+			"Invalid GRAV_MCP_URL scheme",
+			Config{
+				OAuthProxy: OAuthProxyConfig{
+					ClientID:       "id",
+					ClientSecret:   "secret",
+					GravToken:      "token",
+					GravMCPURL:     "ftp://127.0.0.1/mcp",
+					ProxyBaseURL:   "https://example.com",
+					AuthCodeTTL:    300,
+					AccessTokenTTL: 86400,
+				},
+			},
+			true,
+		},
+		{
+			"Zero AuthCodeTTL",
+			Config{
+				OAuthProxy: OAuthProxyConfig{
+					ClientID:       "id",
+					ClientSecret:   "secret",
+					GravToken:      "token",
+					GravMCPURL:     "http://127.0.0.1/api/mcp",
+					ProxyBaseURL:   "https://example.com",
+					AuthCodeTTL:    0,
+					AccessTokenTTL: 86400,
+				},
+			},
+			true,
+		},
+		{
+			"Negative AccessTokenTTL",
+			Config{
+				OAuthProxy: OAuthProxyConfig{
+					ClientID:       "id",
+					ClientSecret:   "secret",
+					GravToken:      "token",
+					GravMCPURL:     "http://127.0.0.1/api/mcp",
+					ProxyBaseURL:   "https://example.com",
+					AuthCodeTTL:    300,
+					AccessTokenTTL: -1,
+				},
+			},
+			true,
 		},
 		{
 			"Missing ClientID",

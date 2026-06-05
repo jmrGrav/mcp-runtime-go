@@ -1,15 +1,20 @@
 package oauthproxy
 
 import (
+	"context"
 	"fmt"
 	mcpctx "mcp-runtime-go/internal/context"
+	"mcp-runtime-go/internal/observability"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"path"
 	"strings"
 	"time"
 )
+
+func appendSubPath(ctx context.Context, subPath string) context.Context {
+	return context.WithValue(ctx, subPathContextKey{}, subPath)
+}
 
 var hopByHopHeaders = []string{
 	"Connection",
@@ -32,8 +37,52 @@ func (rw *proxyResponseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// Write captures an implicit 200 that the underlying ResponseWriter would emit on first Write.
+func (rw *proxyResponseWriter) Write(b []byte) (int, error) {
+	if rw.statusCode == 0 {
+		rw.WriteHeader(http.StatusOK)
+	}
+	return rw.ResponseWriter.Write(b)
+}
+
+// buildReverseProxy creates the cached reverse proxy. The Director reads the per-request
+// sub-path from the request context set by HandleProxy.
+func (s *Service) buildReverseProxy() *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			subPath, _ := req.Context().Value(subPathContextKey{}).(string)
+
+			req.URL.Scheme = s.backendURL.Scheme
+			req.URL.Host = s.backendURL.Host
+			req.URL.Path = strings.TrimSuffix(s.backendURL.Path, "/") + subPath
+			req.URL.RawQuery = req.URL.RawQuery // preserved by ReverseProxy from original
+
+			req.Host = s.cfg.OAuthProxy.GravHost
+
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.cfg.OAuthProxy.GravToken))
+			req.Header.Del("Forwarded")
+			req.Header["X-Forwarded-For"] = nil
+			req.Header.Del("X-Forwarded-Host")
+			req.Header.Del("X-Forwarded-Proto")
+			req.Header.Del("X-Forwarded-Server")
+
+			req.Header.Set("X-Request-ID", mcpctx.GetRequestID(req.Context()))
+
+			for _, h := range hopByHopHeaders {
+				req.Header.Del(h)
+			}
+		},
+		Transport: s.httpClient.Transport,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			s.auditLog(r, "proxy_error", map[string]interface{}{"error": err.Error()})
+			observability.ProxyErrorsTotal.Inc()
+			http.Error(w, "proxy error", http.StatusBadGateway)
+		},
+	}
+}
+
 func (s *Service) HandleProxy(w http.ResponseWriter, r *http.Request) {
-	// 1. Auth Validation
+	// 1. Auth validation
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Bearer ") {
 		s.unauthorized(w, "Bearer token required")
@@ -45,14 +94,9 @@ func (s *Service) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Path Validation & Boundary Check
-	// Goal: mcpBasePath -> /api/mcp, mcpBasePath + "/foo" -> /api/mcp/foo
-	// Reject: /mcp_admin, /mcp@evil.com, /mcp/../admin
-
-	// Normalize path to prevent dot-segment bypass
+	// 2. Path validation & boundary check
 	cleanPath := path.Clean(r.URL.Path)
 
-	// Prevent "@" or other characters that could lead to misrouting
 	if strings.Contains(r.URL.Path, "@") || strings.Contains(r.URL.RawPath, "%2e") || strings.Contains(r.URL.RawPath, "%2E") {
 		s.auditLog(r, "proxy_rejected", map[string]interface{}{"reason": "malformed_path", "path": r.URL.Path})
 		http.Error(w, "malformed path", http.StatusBadRequest)
@@ -65,54 +109,27 @@ func (s *Service) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subPath := strings.TrimPrefix(cleanPath, mcpBasePath)
-	// subPath is now either "" or starting with "/"
-
-	targetURL, err := url.Parse(s.cfg.OAuthProxy.GravMCPURL)
-	if err != nil {
-		http.Error(w, "invalid backend configuration", http.StatusInternalServerError)
+	if s.backendURL == nil {
+		http.Error(w, "backend not configured", http.StatusServiceUnavailable)
 		return
 	}
 
-	proxy := &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL.Scheme = targetURL.Scheme
-			req.URL.Host = targetURL.Host
-			// targetURL.Path is probably /api/mcp
-			req.URL.Path = strings.TrimSuffix(targetURL.Path, "/") + subPath
-			req.URL.RawQuery = r.URL.RawQuery
+	subPath := strings.TrimPrefix(cleanPath, mcpBasePath)
 
-			// Host Header
-			req.Host = s.cfg.OAuthProxy.GravHost
+	// 3. Attach sub-path to context for the cached Director to read.
+	ctx := r.Context()
+	ctx = appendSubPath(ctx, subPath)
+	r = r.WithContext(ctx)
 
-			// Auth Header
-			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.cfg.OAuthProxy.GravToken))
-			req.Header.Del("Forwarded")
-			req.Header["X-Forwarded-For"] = nil
-			req.Header.Del("X-Forwarded-Host")
-			req.Header.Del("X-Forwarded-Proto")
-			req.Header.Del("X-Forwarded-Server")
-
-			// Propagation
-			req.Header.Set("X-Request-ID", mcpctx.GetRequestID(r.Context()))
-
-			// Strip all hop-by-hop headers
-			for _, h := range hopByHopHeaders {
-				req.Header.Del(h)
-			}
-		},
-		Transport: s.httpClient.Transport,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			s.auditLog(r, "proxy_error", map[string]interface{}{"error": err.Error()})
-			http.Error(w, "proxy error", http.StatusBadGateway)
-		},
-	}
-
+	// 4. Proxy with per-request query string preserved.
+	// ReverseProxy copies r.URL.RawQuery to req.URL.RawQuery in the Director via the
+	// ModifyRequest chain; we preserve it from the original request.
 	start := time.Now()
-	rw := &proxyResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-	proxy.ServeHTTP(rw, r)
+	rw := &proxyResponseWriter{ResponseWriter: w, statusCode: 0}
+	s.proxy.ServeHTTP(rw, r)
 	duration := time.Since(start)
 
+	observability.ProxyRequestsTotal.Inc()
 	s.auditLog(r, "proxy_hit", map[string]interface{}{
 		"path":        cleanPath,
 		"method":      r.Method,

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"reflect"
 	"strconv"
@@ -22,7 +23,7 @@ type OAuthProxyConfig struct {
 	ProxyBaseURL            string   `env:"PROXY_BASE_URL" envAlias:"MCP_PROXY_BASE_URL" envDefault:"https://www.arleo.eu"`
 	TokensFile              string   `env:"TOKENS_FILE" envAlias:"MCP_TOKEN_STORE" envDefault:"/opt/mcp-oauth-proxy/tokens.json"`
 	TokensDB                string   `env:"TOKENS_DB" envAlias:"MCP_TOKEN_DB" envDefault:"/opt/mcp-oauth-proxy/tokens.db"`
-	UseSQLite               bool     `env:"USE_SQLITE" envDefault:"false"`
+	UseSQLite               bool     `env:"USE_SQLITE" envDefault:"true"`
 	AuditLogFile            string   `env:"AUDIT_LOG_FILE" envAlias:"MCP_AUDIT_LOG" envDefault:"/var/log/mcp-oauth/audit.log"`
 	MCPCACert               string   `env:"MCP_CA_CERT" envAlias:"MCP_CA_CERT"`
 	AuthCodeTTL             int      `env:"AUTH_CODE_TTL" envDefault:"300"`
@@ -63,6 +64,34 @@ func (c *Config) Validate() error {
 	if c.OAuthProxy.GravToken == "" {
 		return fmt.Errorf("GRAV_TOKEN is required")
 	}
+
+	// Validate URLs: must be non-empty, parseable, and have http/https scheme.
+	for envName, raw := range map[string]string{
+		"GRAV_MCP_URL":   c.OAuthProxy.GravMCPURL,
+		"PROXY_BASE_URL": c.OAuthProxy.ProxyBaseURL,
+	} {
+		if raw == "" {
+			return fmt.Errorf("%s must not be empty", envName)
+		}
+		u, err := url.Parse(raw)
+		if err != nil {
+			return fmt.Errorf("%s is not a valid URL: %w", envName, err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("%s must use http or https scheme, got %q", envName, u.Scheme)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("%s must include a host", envName)
+		}
+	}
+
+	if c.OAuthProxy.AuthCodeTTL <= 0 {
+		return fmt.Errorf("AUTH_CODE_TTL must be > 0, got %d", c.OAuthProxy.AuthCodeTTL)
+	}
+	if c.OAuthProxy.AccessTokenTTL <= 0 {
+		return fmt.Errorf("ACCESS_TOKEN_TTL must be > 0, got %d", c.OAuthProxy.AccessTokenTTL)
+	}
+
 	return nil
 }
 

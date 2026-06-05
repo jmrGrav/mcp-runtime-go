@@ -128,6 +128,7 @@ func TestHandleAuthorize(t *testing.T) {
 			http.StatusFound,
 		},
 		{
+			// RFC 6749 §4.1.2.1: other errors redirect to redirect_uri with error param.
 			"Missing state",
 			url.Values{
 				"response_type":         {"code"},
@@ -136,9 +137,10 @@ func TestHandleAuthorize(t *testing.T) {
 				"code_challenge":        {"JBbiqONGWPaAmwXk_8bT6UnlPfrn65D32eZlJS-zGG0"},
 				"code_challenge_method": {"S256"},
 			},
-			http.StatusBadRequest,
+			http.StatusFound,
 		},
 		{
+			// RFC 6749 §4.1.2.1: other errors redirect to redirect_uri with error param.
 			"Missing PKCE when mandatory",
 			url.Values{
 				"response_type": {"code"},
@@ -146,14 +148,26 @@ func TestHandleAuthorize(t *testing.T) {
 				"redirect_uri":  {"https://claude.ai/callback"},
 				"state":         {"test-state"},
 			},
-			http.StatusBadRequest,
+			http.StatusFound,
 		},
 		{
+			// RFC 6749 §4.1.2.1: invalid client_id must NOT redirect — return error directly.
 			"Invalid client_id",
 			url.Values{
 				"response_type": {"code"},
 				"client_id":     {"wrong"},
 				"redirect_uri":  {"https://claude.ai/callback"},
+				"state":         {"test-state"},
+			},
+			http.StatusUnauthorized,
+		},
+		{
+			// RFC 6749 §4.1.2.1: invalid redirect_uri must NOT redirect — return 400 directly.
+			"Invalid redirect_uri",
+			url.Values{
+				"response_type": {"code"},
+				"client_id":     {cfg.OAuthProxy.ClientID},
+				"redirect_uri":  {"http://evil.com/cb"},
 				"state":         {"test-state"},
 			},
 			http.StatusBadRequest,

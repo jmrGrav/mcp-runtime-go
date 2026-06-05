@@ -19,10 +19,13 @@ func New(cfg *config.Config, handler http.Handler) *Server {
 	return &Server{
 		cfg: cfg,
 		httpServer: &http.Server{
-			Addr:         addr,
-			Handler:      handler,
-			ReadTimeout:  10 * time.Second,
-			WriteTimeout: 10 * time.Second,
+			Addr:    addr,
+			Handler: handler,
+			// ReadTimeout covers reading the request headers and body.
+			ReadTimeout: 10 * time.Second,
+			// WriteTimeout must exceed the backend client Timeout (30 s) to avoid
+			// the server closing the connection before the proxy response arrives.
+			WriteTimeout: 60 * time.Second,
 			IdleTimeout:  60 * time.Second,
 		},
 	}

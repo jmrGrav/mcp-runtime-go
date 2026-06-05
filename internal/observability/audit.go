@@ -36,13 +36,10 @@ func (a *AuditLogger) LogWithIP(event string, srcIP string, r *http.Request, fie
 	entry["event"] = event
 
 	if r != nil {
+		// Use the canonical srcIP resolved by security.GetRequestInfo; fall back to
+		// RemoteAddr only when the caller did not supply a resolved IP.
 		if srcIP == "" {
-			xff := r.Header.Get("X-Forwarded-For")
-			if xff != "" {
-				srcIP = strings.TrimSpace(strings.Split(xff, ",")[0])
-			} else {
-				srcIP = r.RemoteAddr
-			}
+			srcIP = r.RemoteAddr
 		}
 		entry["src_ip"] = srcIP
 		ua := r.Header.Get("User-Agent")
@@ -61,15 +58,27 @@ func (a *AuditLogger) LogWithIP(event string, srcIP string, r *http.Request, fie
 		return
 	}
 
+	if a.filePath == "" {
+		return
+	}
+
 	f, err := os.OpenFile(a.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] audit log open failed: %v\n", err)
+		AuditWriteFailures.Inc()
 		return
 	}
 	defer f.Close()
 
-	f.Write(data)
-	f.Write([]byte("\n"))
+	if _, err := f.Write(data); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] audit log write failed: %v\n", err)
+		AuditWriteFailures.Inc()
+		return
+	}
+	if _, err := f.Write([]byte("\n")); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] audit log newline write failed: %v\n", err)
+		AuditWriteFailures.Inc()
+	}
 }
 
 func isSensitiveAuditKey(key string) bool {
