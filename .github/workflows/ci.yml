@@ -23,8 +23,19 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test ./...
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
+
+      - name: Test with coverage
+        run: go test -coverprofile=coverage.out ./...
+
+      - name: Coverage gate (≥60%)
+        run: |
+          pct=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${pct}%"
+          awk -v pct="$pct" 'BEGIN { if (pct+0 < 60) { print "FAIL: coverage " pct "% is below 60% threshold"; exit 1 } }'
 
       - name: Test (race detector)
         run: go test -race ./...
@@ -32,5 +43,7 @@ jobs:
       - name: Build mcp-runtime
         run: go build ./cmd/mcp-runtime
 
-      - name: Build shadow-compare
-        run: go build ./cmd/shadow-compare
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...

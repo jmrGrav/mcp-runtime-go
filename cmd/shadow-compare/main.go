@@ -1,3 +1,6 @@
+// Package main implements the shadow-compare audit tool.
+// HISTORICAL: shadow mode was retired 2026-06-03 when the Go runtime became authoritative.
+// This binary is preserved for reference only and is no longer built by CI.
 package main
 
 import (

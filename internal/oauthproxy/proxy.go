@@ -55,7 +55,7 @@ func (s *Service) buildReverseProxy() *httputil.ReverseProxy {
 			req.URL.Scheme = s.backendURL.Scheme
 			req.URL.Host = s.backendURL.Host
 			req.URL.Path = strings.TrimSuffix(s.backendURL.Path, "/") + subPath
-			req.URL.RawQuery = req.URL.RawQuery // preserved by ReverseProxy from original
+			// req.URL.RawQuery is preserved from the original request by httputil.ReverseProxy.
 
 			req.Host = s.cfg.OAuthProxy.GravHost
 
