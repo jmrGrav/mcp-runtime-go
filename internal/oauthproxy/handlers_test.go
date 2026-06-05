@@ -502,9 +502,9 @@ func TestHandleAuthorize_RFC6749_ErrorRedirect(t *testing.T) {
 	s, cfg := setupTestService(t)
 
 	tests := []struct {
-		name          string
-		query         url.Values
-		wantError     string
+		name      string
+		query     url.Values
+		wantError string
 	}{
 		{
 			name: "missing state",

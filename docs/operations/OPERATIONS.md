@@ -21,7 +21,7 @@ Public internet
     → Cloudflare
     → OpenResty (mcp-hugo.arleo.eu)
     → Go mcp-runtime 127.0.0.1:8086
-    → Grav MCP backend (internal)
+    → Hugo MCP backend (internal)
 ```
 
 ### Endpoint access matrix

@@ -17,7 +17,7 @@ func TestNewHandler_MCPRoutes(t *testing.T) {
 		OAuthProxy: config.OAuthProxyConfig{
 			ClientID:     "id",
 			ClientSecret: "secret",
-			GravToken:    "token",
+			HugoToken:    "token",
 			TokensFile:   filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile: filepath.Join(tmpDir, "audit.log"),
 		},

@@ -11,8 +11,8 @@ import (
 	"mcp-runtime-go/internal/security"
 	"mcp-runtime-go/internal/storage"
 	"net/http"
-	"net/url"
 	"net/http/httputil"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -54,10 +54,10 @@ func NewService(cfg *config.Config, store storage.Store, audit *observability.Au
 
 	// Pre-parse backend URL at startup to fail fast on misconfiguration.
 	var backendURL *url.URL
-	if cfg.OAuthProxy.GravMCPURL != "" {
-		backendURL, err = url.Parse(cfg.OAuthProxy.GravMCPURL)
+	if cfg.OAuthProxy.HugoMCPURL != "" {
+		backendURL, err = url.Parse(cfg.OAuthProxy.HugoMCPURL)
 		if err != nil {
-			return nil, fmt.Errorf("invalid backend URL %q: %w", cfg.OAuthProxy.GravMCPURL, err)
+			return nil, fmt.Errorf("invalid backend URL %q: %w", cfg.OAuthProxy.HugoMCPURL, err)
 		}
 	}
 
@@ -340,7 +340,7 @@ func (s *Service) Ready() error {
 	if s.cfg.OAuthProxy.ClientID == "" {
 		return fmt.Errorf("config incomplete: missing client_id")
 	}
-	if s.cfg.OAuthProxy.GravMCPURL == "" {
+	if s.cfg.OAuthProxy.HugoMCPURL == "" {
 		return fmt.Errorf("config incomplete: missing backend MCP URL")
 	}
 	if _, err := s.store.Load(); err != nil {

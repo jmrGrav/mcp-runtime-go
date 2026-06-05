@@ -22,7 +22,7 @@ func TestNewApp(t *testing.T) {
 		OAuthProxy: config.OAuthProxyConfig{
 			ClientID:     "id",
 			ClientSecret: "secret",
-			GravToken:    "token",
+			HugoToken:    "token",
 			TokensFile:   filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile: filepath.Join(tmpDir, "audit.log"),
 		},
@@ -56,8 +56,8 @@ func newTestHandler(t *testing.T) http.Handler {
 		OAuthProxy: config.OAuthProxyConfig{
 			ClientID:       "id",
 			ClientSecret:   "secret",
-			GravToken:      "token",
-			GravMCPURL:     "http://127.0.0.1/api/mcp",
+			HugoToken:      "token",
+			HugoMCPURL:     "http://127.0.0.1/api/mcp",
 			ProxyBaseURL:   "https://example.com",
 			TokensFile:     filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
@@ -82,8 +82,8 @@ func TestNewHandler_HealthAliases(t *testing.T) {
 		OAuthProxy: config.OAuthProxyConfig{
 			ClientID:       "id",
 			ClientSecret:   "secret",
-			GravToken:      "token",
-			GravMCPURL:     "http://127.0.0.1/api/mcp",
+			HugoToken:      "token",
+			HugoMCPURL:     "http://127.0.0.1/api/mcp",
 			ProxyBaseURL:   "https://example.com",
 			TokensFile:     filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
@@ -121,13 +121,13 @@ func TestNewHandler_HealthAliases(t *testing.T) {
 
 func TestNewHandler_ReadyzUnready(t *testing.T) {
 	tmpDir := t.TempDir()
-	// GravMCPURL intentionally empty → Ready() returns error → /readyz must 503
+	// HugoMCPURL intentionally empty → Ready() returns error → /readyz must 503
 	cfg := &config.Config{
 		OAuthProxy: config.OAuthProxyConfig{
 			ClientID:     "id",
 			ClientSecret: "secret",
-			GravToken:    "token",
-			GravMCPURL:   "",
+			HugoToken:    "token",
+			HugoMCPURL:   "",
 			TokensFile:   filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile: filepath.Join(tmpDir, "audit.log"),
 		},
@@ -173,8 +173,8 @@ func TestApp_Run(t *testing.T) {
 		OAuthProxy: config.OAuthProxyConfig{
 			ClientID:       "id",
 			ClientSecret:   "secret",
-			GravToken:      "token",
-			GravMCPURL:     "http://127.0.0.1/api/mcp",
+			HugoToken:      "token",
+			HugoMCPURL:     "http://127.0.0.1/api/mcp",
 			ProxyBaseURL:   "http://127.0.0.1",
 			TokensFile:     filepath.Join(tmpDir, "tokens.json"),
 			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),

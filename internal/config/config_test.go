@@ -10,16 +10,16 @@ func TestLoad(t *testing.T) {
 	// Clear env after test
 	origClientID := os.Getenv("CLIENT_ID")
 	origClientSecret := os.Getenv("CLIENT_SECRET")
-	origGravToken := os.Getenv("GRAV_TOKEN")
+	origHugoToken := os.Getenv("HUGO_TOKEN")
 	defer func() {
 		os.Setenv("CLIENT_ID", origClientID)
 		os.Setenv("CLIENT_SECRET", origClientSecret)
-		os.Setenv("GRAV_TOKEN", origGravToken)
+		os.Setenv("HUGO_TOKEN", origHugoToken)
 	}()
 
 	os.Setenv("CLIENT_ID", "test-client")
 	os.Setenv("CLIENT_SECRET", "test-secret")
-	os.Setenv("GRAV_TOKEN", "test-token")
+	os.Setenv("HUGO_TOKEN", "test-token")
 
 	cfg, err := Load()
 	if err != nil {
@@ -48,8 +48,8 @@ func TestValidate(t *testing.T) {
 				OAuthProxy: OAuthProxyConfig{
 					ClientID:       "id",
 					ClientSecret:   "secret",
-					GravToken:      "token",
-					GravMCPURL:     "http://127.0.0.1/api/mcp",
+					HugoToken:      "token",
+					HugoMCPURL:     "http://127.0.0.1/api/mcp",
 					ProxyBaseURL:   "https://example.com",
 					AuthCodeTTL:    300,
 					AccessTokenTTL: 86400,
@@ -58,13 +58,13 @@ func TestValidate(t *testing.T) {
 			false,
 		},
 		{
-			"Invalid GRAV_MCP_URL scheme",
+			"Invalid HUGO_MCP_URL scheme",
 			Config{
 				OAuthProxy: OAuthProxyConfig{
 					ClientID:       "id",
 					ClientSecret:   "secret",
-					GravToken:      "token",
-					GravMCPURL:     "ftp://127.0.0.1/mcp",
+					HugoToken:      "token",
+					HugoMCPURL:     "ftp://127.0.0.1/mcp",
 					ProxyBaseURL:   "https://example.com",
 					AuthCodeTTL:    300,
 					AccessTokenTTL: 86400,
@@ -78,8 +78,8 @@ func TestValidate(t *testing.T) {
 				OAuthProxy: OAuthProxyConfig{
 					ClientID:       "id",
 					ClientSecret:   "secret",
-					GravToken:      "token",
-					GravMCPURL:     "http://127.0.0.1/api/mcp",
+					HugoToken:      "token",
+					HugoMCPURL:     "http://127.0.0.1/api/mcp",
 					ProxyBaseURL:   "https://example.com",
 					AuthCodeTTL:    0,
 					AccessTokenTTL: 86400,
@@ -93,8 +93,8 @@ func TestValidate(t *testing.T) {
 				OAuthProxy: OAuthProxyConfig{
 					ClientID:       "id",
 					ClientSecret:   "secret",
-					GravToken:      "token",
-					GravMCPURL:     "http://127.0.0.1/api/mcp",
+					HugoToken:      "token",
+					HugoMCPURL:     "http://127.0.0.1/api/mcp",
 					ProxyBaseURL:   "https://example.com",
 					AuthCodeTTL:    300,
 					AccessTokenTTL: -1,
@@ -107,7 +107,7 @@ func TestValidate(t *testing.T) {
 			Config{
 				OAuthProxy: OAuthProxyConfig{
 					ClientSecret: "secret",
-					GravToken:    "token",
+					HugoToken:    "token",
 				},
 			},
 			true,
@@ -117,13 +117,13 @@ func TestValidate(t *testing.T) {
 			Config{
 				OAuthProxy: OAuthProxyConfig{
 					ClientID:  "id",
-					GravToken: "token",
+					HugoToken: "token",
 				},
 			},
 			true,
 		},
 		{
-			"Missing GravToken",
+			"Missing HugoToken",
 			Config{
 				OAuthProxy: OAuthProxyConfig{
 					ClientID:     "id",

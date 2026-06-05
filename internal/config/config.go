@@ -15,9 +15,9 @@ type Config struct {
 }
 
 type OAuthProxyConfig struct {
-	GravMCPURL              string   `env:"GRAV_MCP_URL" envAlias:"MCP_BACKEND_URL" envDefault:"http://127.0.0.1/api/mcp"`
-	GravHost                string   `env:"GRAV_HOST" envDefault:"www.arleo.eu"`
-	GravToken               string   `env:"GRAV_TOKEN"`
+	HugoMCPURL              string   `env:"HUGO_MCP_URL" envAlias:"GRAV_MCP_URL" envDefault:"http://127.0.0.1/api/mcp"`
+	HugoHost                string   `env:"HUGO_HOST" envAlias:"GRAV_HOST" envDefault:"www.arleo.eu"`
+	HugoToken               string   `env:"HUGO_TOKEN" envAlias:"GRAV_TOKEN"`
 	ClientID                string   `env:"CLIENT_ID" envAlias:"MCP_CLIENT_ID"`
 	ClientSecret            string   `env:"CLIENT_SECRET" envAlias:"MCP_CLIENT_SECRET"`
 	ProxyBaseURL            string   `env:"PROXY_BASE_URL" envAlias:"MCP_PROXY_BASE_URL" envDefault:"https://www.arleo.eu"`
@@ -47,6 +47,20 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	// Emit deprecation warnings when legacy Grav env vars are used without their Hugo replacements.
+	for _, pair := range [][2]string{
+		{"GRAV_MCP_URL", "HUGO_MCP_URL"},
+		{"GRAV_TOKEN", "HUGO_TOKEN"},
+		{"GRAV_HOST", "HUGO_HOST"},
+	} {
+		legacy, replacement := pair[0], pair[1]
+		if _, legacySet := os.LookupEnv(legacy); legacySet {
+			if _, newSet := os.LookupEnv(replacement); !newSet {
+				fmt.Fprintf(os.Stderr, "[WARN] %s is deprecated, use %s\n", legacy, replacement)
+			}
+		}
+	}
+
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -61,13 +75,13 @@ func (c *Config) Validate() error {
 	if c.OAuthProxy.ClientSecret == "" {
 		return fmt.Errorf("CLIENT_SECRET is required")
 	}
-	if c.OAuthProxy.GravToken == "" {
-		return fmt.Errorf("GRAV_TOKEN is required")
+	if c.OAuthProxy.HugoToken == "" {
+		return fmt.Errorf("HUGO_TOKEN is required")
 	}
 
 	// Validate URLs: must be non-empty, parseable, and have http/https scheme.
 	for envName, raw := range map[string]string{
-		"GRAV_MCP_URL":   c.OAuthProxy.GravMCPURL,
+		"HUGO_MCP_URL":   c.OAuthProxy.HugoMCPURL,
 		"PROXY_BASE_URL": c.OAuthProxy.ProxyBaseURL,
 	} {
 		if raw == "" {

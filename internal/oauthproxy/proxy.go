@@ -57,9 +57,9 @@ func (s *Service) buildReverseProxy() *httputil.ReverseProxy {
 			req.URL.Path = strings.TrimSuffix(s.backendURL.Path, "/") + subPath
 			// req.URL.RawQuery is preserved from the original request by httputil.ReverseProxy.
 
-			req.Host = s.cfg.OAuthProxy.GravHost
+			req.Host = s.cfg.OAuthProxy.HugoHost
 
-			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.cfg.OAuthProxy.GravToken))
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", s.cfg.OAuthProxy.HugoToken))
 			req.Header.Del("Forwarded")
 			req.Header["X-Forwarded-For"] = nil
 			req.Header.Del("X-Forwarded-Host")

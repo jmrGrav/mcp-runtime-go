@@ -42,11 +42,11 @@ Total coverage         → 83.0% (gate: ≥ 60%)
 | F-07 | HTTP method guards absent | **FIXED** | All handlers: GET/POST enforcement with 405 + `Allow` header (was done in hardening/v1.1.1-rc1) |
 | F-08 | ROLLBACK.md stale; OPERATIONS.md placeholders | **FIXED** | OPERATIONS.md: all placeholders replaced. ROLLBACK.md: marked HISTORICAL. ROLLBACK_PRODUCTION.md: new executable runbook |
 | F-09 | USE_SQLITE default false | **FIXED** | `envDefault:"true"` in config.go; JSON backend logs WARN at startup |
-| F-10 | Health endpoints don't verify storage | **FIXED** | `/readyz` calls `Service.Ready()` which checks ClientID, GravMCPURL, store.Load(), audit.Ping() (was done in hardening/v1.1.1-rc1) |
+| F-10 | Health endpoints don't verify storage | **FIXED** | `/readyz` calls `Service.Ready()` which checks ClientID, HugoMCPURL, store.Load(), audit.Ping() (was done in hardening/v1.1.1-rc1) |
 | F-11 | observability.Logger nil before InitLogger | **FIXED** | Logger initialised to discard handler at declaration; never nil |
 | F-12 | proxyResponseWriter Write() not overridden | **FIXED** | `Write()` added; calls `WriteHeader(200)` if not already called |
 | F-13 | RegisterClient returns same ClientID | **INTENTIONALLY RETAINED** | Single-tenant design decision. Documented in service.go comment and PRODUCTION_VALIDATION.md. Rate limiting at OpenResty layer. |
-| F-14 | Config URL/TTL validation absent | **FIXED** | `Validate()` checks scheme, host for GRAV_MCP_URL and PROXY_BASE_URL; rejects TTL ≤ 0 |
+| F-14 | Config URL/TTL validation absent | **FIXED** | `Validate()` checks scheme, host for HUGO_MCP_URL and PROXY_BASE_URL; rejects TTL ≤ 0 |
 | F-15 | bindEnv empty bool inconsistency | **INTENTIONALLY RETAINED** | Behaviour is correct and tested (`TestBindEnv_EmptyBoolFailsWhenSet`). Inconsistency is documented. Future maintainer note: empty string for bool is always an error. |
 | F-16 | syncTokens silently swallows errors | **FIXED** | Logs `ERROR` to structured logger + increments `TokenPersistenceFailures` counter |
 | F-17 | shadow-compare dead code | **PARTIALLY RETIRED** | HISTORICAL comment added to `cmd/shadow-compare/main.go`. Binary removed from CI. Code preserved for audit trail. |
