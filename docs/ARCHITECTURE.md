@@ -1,7 +1,7 @@
 # Architecture
 
 `mcp-runtime-go` is the authoritative Go runtime for OAuth 2.0 + PKCE and MCP proxying.
-It owns the live production flow; shadow mode and the Python predecessor are historical.
+It owns the live production flow.
 
 ## System View
 
@@ -99,7 +99,5 @@ Common runtime controls:
 
 ## Historical / Legacy
 
-- `shadow-compare` is historical and no longer part of the live path.
-- Shadow mode is retired.
 - Python rollback references are retained only as historical recovery context.
 - Additional history, audits, and migration notes live under `docs/archive/`.

@@ -37,7 +37,6 @@ type OAuthProxyConfig struct {
 type RuntimeConfig struct {
 	ListenHost string `env:"LISTEN_HOST" envDefault:"127.0.0.1"`
 	ListenPort int    `env:"LISTEN_PORT" envDefault:"8083"`
-	ShadowMode bool   `env:"SHADOW_MODE" envDefault:"false"`
 	LogLevel   string `env:"LOG_LEVEL" envDefault:"info"`
 }
 

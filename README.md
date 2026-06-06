@@ -96,7 +96,7 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for current status, remaining debt, and n
 
 ## Documentation History
 
-Historical reports, audits, migration notes, and shadow-era material live under `docs/archive/`.
+Historical reports, audits, and migration notes live under `docs/archive/`.
 
 ## License
 

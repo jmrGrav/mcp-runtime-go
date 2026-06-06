@@ -13,7 +13,6 @@
 - SQLite WAL token storage is live.
 - Structured audit logging and metrics are live.
 - Readiness and health probes are live.
-- Shadow mode has been retired.
 
 ## Remaining Debt
 
@@ -26,7 +25,6 @@
 Goals:
 
 - keep production behavior unchanged
-- remove shadow-era operational noise from the live docs
 - simplify packaging and operator instructions
 - keep archival history, but not as active documentation
 
