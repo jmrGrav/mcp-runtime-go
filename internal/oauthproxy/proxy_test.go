@@ -177,3 +177,115 @@ func TestHandleProxy_Security(t *testing.T) {
 		t.Errorf("expected 200, got %d", rr.Code)
 	}
 }
+
+func TestHandleProxy_AuthFailures(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			HugoMCPURL: backend.URL,
+			HugoToken:  "test-token",
+			ClientID:   "hugo-mcp",
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+	s, _ := NewService(cfg, store, audit, nil)
+
+	t.Run("missing bearer", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/mcp/tools", nil)
+		rr := httptest.NewRecorder()
+		s.HandleProxy(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rr.Code)
+		}
+	})
+
+	t.Run("invalid bearer", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/mcp/tools", nil)
+		req.Header.Set("Authorization", "Bearer invalid-token")
+		rr := httptest.NewRecorder()
+		s.HandleProxy(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rr.Code)
+		}
+	})
+}
+
+func TestHandleProxy_BackendMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			HugoToken: "test-token",
+			ClientID:  "hugo-mcp",
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+	s, _ := NewService(cfg, store, audit, nil)
+	s.AddAccessToken("valid-token", time.Now().Add(1*time.Hour))
+
+	req := httptest.NewRequest("GET", "/mcp/tools", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rr := httptest.NewRecorder()
+	s.HandleProxy(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rr.Code)
+	}
+}
+
+func TestHandleProxy_ProxyError(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			HugoMCPURL: backend.URL,
+			HugoToken:  "test-token",
+			ClientID:   "hugo-mcp",
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+	s, _ := NewService(cfg, store, audit, nil)
+	s.AddAccessToken("valid-token", time.Now().Add(1*time.Hour))
+
+	backend.Close()
+
+	req := httptest.NewRequest("GET", "/mcp/tools", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("X-Request-ID", "req-1")
+	ctx := mcpctx.WithRequestID(req.Context(), "req-1")
+	req = req.WithContext(ctx)
+	rr := httptest.NewRecorder()
+	s.HandleProxy(rr, req)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", rr.Code)
+	}
+}
+
+func TestProxyResponseWriter_Implicit200(t *testing.T) {
+	rr := httptest.NewRecorder()
+	rw := &proxyResponseWriter{ResponseWriter: rr, statusCode: 0}
+
+	// Write without calling WriteHeader
+	n, err := rw.Write([]byte("hello"))
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	if n != 5 {
+		t.Errorf("expected 5 bytes written, got %d", n)
+	}
+	if rw.statusCode != http.StatusOK {
+		t.Errorf("expected statusCode 200, got %d", rw.statusCode)
+	}
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected recorder code 200, got %d", rr.Code)
+	}
+}

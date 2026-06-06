@@ -5,6 +5,17 @@ import (
 	"os"
 )
 
+type sqliteMigrationStore interface {
+	Load() (map[string]float64, error)
+	Save(map[string]float64) error
+	Checkpoint() error
+	Close() error
+}
+
+var newSQLiteStoreFn = func(path string) (sqliteMigrationStore, error) {
+	return NewSQLiteStore(path)
+}
+
 // MigrateJSONToSQLite performs a one-way migration of tokens from JSON to SQLite.
 // It follows the atomic sequence:
 // 1. Load tokens from JSON.
@@ -27,7 +38,7 @@ func MigrateJSONToSQLite(jsonPath, sqlitePath string) error {
 	}
 
 	// Create/Open SQLite
-	sqliteStore, err := NewSQLiteStore(sqlitePath)
+	sqliteStore, err := newSQLiteStoreFn(sqlitePath)
 	if err != nil {
 		return fmt.Errorf("failed to open SQLite at %s: %w", sqlitePath, err)
 	}
@@ -48,7 +59,7 @@ func MigrateJSONToSQLite(jsonPath, sqlitePath string) error {
 	}
 
 	// Force WAL checkpoint to ensure all data is in the main database file
-	if _, err := sqliteStore.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+	if err := sqliteStore.Checkpoint(); err != nil {
 		return fmt.Errorf("failed to checkpoint SQLite WAL: %w", err)
 	}
 

@@ -3,6 +3,7 @@ package observability
 import (
 	"encoding/json"
 	"fmt"
+	mcpctx "mcp-runtime-go/internal/context"
 	"net/http"
 	"os"
 	"regexp"
@@ -12,6 +13,10 @@ import (
 
 type AuditLogger struct {
 	filePath string
+}
+
+var auditWrite = func(f *os.File, data []byte) (int, error) {
+	return f.Write(data)
 }
 
 func NewAuditLogger(path string) *AuditLogger {
@@ -42,6 +47,9 @@ func (a *AuditLogger) LogWithIP(event string, srcIP string, r *http.Request, fie
 			srcIP = r.RemoteAddr
 		}
 		entry["src_ip"] = srcIP
+		if rid := mcpctx.GetRequestID(r.Context()); rid != "" {
+			entry["request_id"] = rid
+		}
 		ua := r.Header.Get("User-Agent")
 		if len(ua) > 200 {
 			ua = ua[:200]
@@ -70,12 +78,12 @@ func (a *AuditLogger) LogWithIP(event string, srcIP string, r *http.Request, fie
 	}
 	defer f.Close()
 
-	if _, err := f.Write(data); err != nil {
+	if _, err := auditWrite(f, data); err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] audit log write failed: %v\n", err)
 		AuditWriteFailures.Inc()
 		return
 	}
-	if _, err := f.Write([]byte("\n")); err != nil {
+	if _, err := auditWrite(f, []byte("\n")); err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] audit log newline write failed: %v\n", err)
 		AuditWriteFailures.Inc()
 	}

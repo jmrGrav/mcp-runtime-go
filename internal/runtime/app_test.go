@@ -3,10 +3,12 @@ package runtime
 import (
 	"context"
 	"encoding/pem"
+	"fmt"
 	"mcp-runtime-go/internal/config"
 	"mcp-runtime-go/internal/oauthproxy"
 	"mcp-runtime-go/internal/observability"
 	"mcp-runtime-go/internal/storage"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,6 +48,131 @@ func TestNewApp(t *testing.T) {
 	}
 	if app.oauth == nil {
 		t.Error("App.oauth is nil")
+	}
+}
+
+func TestNewApp_Errors(t *testing.T) {
+	t.Run("Invalid SQLite path", func(t *testing.T) {
+		cfg := &config.Config{
+			OAuthProxy: config.OAuthProxyConfig{
+				UseSQLite: true,
+				TokensDB:  "/nonexistent/directory/tokens.db",
+			},
+		}
+		_, err := NewApp(cfg)
+		if err == nil {
+			t.Error("expected error for invalid SQLite path")
+		}
+	})
+
+	t.Run("Invalid CA cert path", func(t *testing.T) {
+		cfg := &config.Config{
+			OAuthProxy: config.OAuthProxyConfig{
+				MCPCACert: "/nonexistent/cert.pem",
+			},
+		}
+		_, err := NewApp(cfg)
+		if err == nil {
+			t.Error("expected error for invalid CA cert path")
+		}
+	})
+
+	t.Run("Invalid CA cert content", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		certPath := filepath.Join(tmpDir, "bad.pem")
+		os.WriteFile(certPath, []byte("not a cert"), 0644)
+		cfg := &config.Config{
+			OAuthProxy: config.OAuthProxyConfig{
+				MCPCACert: certPath,
+			},
+		}
+		_, err := NewApp(cfg)
+		if err == nil {
+			t.Error("expected error for invalid CA cert content")
+		}
+	})
+}
+
+func TestNewApp_LogLevels(t *testing.T) {
+	tmpDir := t.TempDir()
+	baseCfg := func(level string) *config.Config {
+		return &config.Config{
+			OAuthProxy: config.OAuthProxyConfig{
+				ClientID:       "id",
+				ClientSecret:   "secret",
+				HugoToken:      "token",
+				HugoMCPURL:     "http://127.0.0.1/api/mcp",
+				ProxyBaseURL:   "https://example.com",
+				TokensFile:     filepath.Join(tmpDir, "tokens.json"),
+				AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
+				AuthCodeTTL:    300,
+				AccessTokenTTL: 86400,
+			},
+			Runtime: config.RuntimeConfig{
+				ListenHost: "127.0.0.1",
+				ListenPort: 0,
+				LogLevel:   level,
+			},
+		}
+	}
+
+	for _, level := range []string{"debug", "warn", "error"} {
+		t.Run(level, func(t *testing.T) {
+			if _, err := NewApp(baseCfg(level)); err != nil {
+				t.Fatalf("NewApp(%s) failed: %v", level, err)
+			}
+		})
+	}
+}
+
+func TestNewApp_UseSQLite(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			ClientID:       "id",
+			ClientSecret:   "secret",
+			HugoToken:      "token",
+			HugoMCPURL:     "http://127.0.0.1/api/mcp",
+			ProxyBaseURL:   "https://example.com",
+			TokensDB:       filepath.Join(tmpDir, "tokens.db"),
+			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
+			AuthCodeTTL:    300,
+			AccessTokenTTL: 86400,
+			UseSQLite:      true,
+		},
+		Runtime: config.RuntimeConfig{
+			ListenHost: "127.0.0.1",
+			ListenPort: 0,
+		},
+	}
+
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp with SQLite failed: %v", err)
+	}
+	if app == nil || app.oauth == nil || app.server == nil {
+		t.Fatal("expected initialized app with SQLite store")
+	}
+}
+
+func TestNewApp_InvalidBackendURL(t *testing.T) {
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			ClientID:     "id",
+			ClientSecret: "secret",
+			HugoToken:    "token",
+			HugoMCPURL:   "http://[::1",
+			AuditLogFile: filepath.Join(t.TempDir(), "audit.log"),
+			TokensFile:   filepath.Join(t.TempDir(), "tokens.json"),
+		},
+		Runtime: config.RuntimeConfig{
+			ListenHost: "127.0.0.1",
+			ListenPort: 0,
+		},
+	}
+
+	if _, err := NewApp(cfg); err == nil {
+		t.Fatal("expected invalid backend URL error")
 	}
 }
 
@@ -216,6 +343,51 @@ func TestApp_Run(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Error("App.Run did not stop after SIGINT")
+	}
+}
+
+func TestApp_Run_ServerStartError(t *testing.T) {
+	tmpDir := t.TempDir()
+	portListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer portListener.Close()
+
+	_, portStr, err := net.SplitHostPort(portListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			ClientID:       "id",
+			ClientSecret:   "secret",
+			HugoToken:      "token",
+			HugoMCPURL:     "http://127.0.0.1/api/mcp",
+			ProxyBaseURL:   "http://127.0.0.1",
+			TokensFile:     filepath.Join(tmpDir, "tokens.json"),
+			AuditLogFile:   filepath.Join(tmpDir, "audit.log"),
+			AuthCodeTTL:    300,
+			AccessTokenTTL: 86400,
+		},
+		Runtime: config.RuntimeConfig{
+			ListenHost: "127.0.0.1",
+			ListenPort: port,
+		},
+	}
+
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp failed: %v", err)
+	}
+
+	if err := app.Run(); err == nil {
+		t.Fatal("expected server start error")
 	}
 }
 

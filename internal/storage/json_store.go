@@ -15,6 +15,9 @@ type TokenStore struct {
 	allowRecover bool
 }
 
+var openDirFn = os.Open
+var syncFileFn = func(f *os.File) error { return f.Sync() }
+
 func NewTokenStore(path string, allowRecover bool) *TokenStore {
 	return &TokenStore{
 		filePath:     path,
@@ -113,12 +116,12 @@ func (s *TokenStore) Save(tokens map[string]float64) error {
 	}
 
 	// Critical: fsync the parent directory to ensure rename is durable
-	df, err := os.Open(dir)
+	df, err := openDirFn(dir)
 	if err != nil {
 		return fmt.Errorf("failed to open parent directory for fsync: %w", err)
 	}
 	defer df.Close()
-	if err := df.Sync(); err != nil {
+	if err := syncFileFn(df); err != nil {
 		return fmt.Errorf("failed to fsync parent directory: %w", err)
 	}
 
