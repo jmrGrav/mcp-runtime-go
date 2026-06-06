@@ -6,6 +6,7 @@ import (
 	"mcp-runtime-go/internal/config"
 	mcpctx "mcp-runtime-go/internal/context"
 	"mcp-runtime-go/internal/observability"
+	"mcp-runtime-go/internal/security"
 	"mcp-runtime-go/internal/storage"
 	"net/http"
 	"net/http/httptest"
@@ -41,6 +42,32 @@ func setupTestService(t *testing.T) (*Service, *config.Config) {
 		t.Fatalf("failed to create service: %v", err)
 	}
 	return s, cfg
+}
+
+func mustParseLocation(t *testing.T, loc string) *url.URL {
+	t.Helper()
+	if loc == "" {
+		t.Fatal("expected Location header, got empty string")
+	}
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatalf("invalid Location header %q: %v", loc, err)
+	}
+	return u
+}
+
+func assertAllowlistedRedirectLocation(t *testing.T, loc string) {
+	t.Helper()
+	u := mustParseLocation(t, loc)
+	if !security.IsAllowedRedirect(loc) {
+		t.Fatalf("expected allowlisted redirect, got %q", loc)
+	}
+	if u.Scheme != "https" {
+		t.Fatalf("expected https redirect, got scheme %q in %q", u.Scheme, loc)
+	}
+	if u.User != nil {
+		t.Fatalf("expected no userinfo in redirect URL, got %q in %q", u.User.String(), loc)
+	}
 }
 
 func TestHandleMetadata(t *testing.T) {
@@ -220,6 +247,75 @@ func TestHandleAuthorize(t *testing.T) {
 
 			if rr.Code != tt.expected {
 				t.Errorf("expected %d, got %d", tt.expected, rr.Code)
+			}
+		})
+	}
+}
+
+func TestHandleAuthorize_ValidRedirectTargetsAreAllowlisted(t *testing.T) {
+	s, cfg := setupTestService(t)
+
+	query := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {cfg.OAuthProxy.ClientID},
+		"redirect_uri":          {"https://claude.ai/callback"},
+		"state":                 {"test-state"},
+		"code_challenge":        {"JBbiqONGWPaAmwXk_8bT6UnlPfrn65D32eZlJS-zGG0"},
+		"code_challenge_method": {"S256"},
+	}
+
+	req := httptest.NewRequest("GET", "/authorize?"+query.Encode(), nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rr := httptest.NewRecorder()
+
+	s.HandleAuthorize(rr, req)
+
+	if rr.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d: %s", rr.Code, rr.Body.String())
+	}
+	assertAllowlistedRedirectLocation(t, rr.Header().Get("Location"))
+}
+
+func TestHandleAuthorize_InvalidRedirectURIsFailClosed(t *testing.T) {
+	s, cfg := setupTestService(t)
+
+	baseQuery := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {cfg.OAuthProxy.ClientID},
+		"state":                 {"test-state"},
+		"code_challenge":        {"JBbiqONGWPaAmwXk_8bT6UnlPfrn65D32eZlJS-zGG0"},
+		"code_challenge_method": {"S256"},
+	}
+
+	tests := []struct {
+		name        string
+		redirectURI string
+	}{
+		{"direct evil host", "https://evil.com/callback"},
+		{"suffix trick", "https://claude.ai.evil.com/callback"},
+		{"userinfo trick", "https://claude.ai@evil.com/callback"},
+		{"http scheme", "http://claude.ai/callback"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := url.Values{}
+			for k, v := range baseQuery {
+				query[k] = append([]string(nil), v...)
+			}
+			query.Set("redirect_uri", tt.redirectURI)
+
+			req := httptest.NewRequest("GET", "/authorize?"+query.Encode(), nil)
+			req.RemoteAddr = "127.0.0.1:1234"
+			rr := httptest.NewRecorder()
+
+			s.HandleAuthorize(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+			}
+			if loc := rr.Header().Get("Location"); loc != "" {
+				t.Fatalf("expected no Location header, got %q", loc)
 			}
 		})
 	}
@@ -626,6 +722,7 @@ func TestHandleAuthorize_RFC6749_ErrorRedirect(t *testing.T) {
 				return
 			}
 			loc := rr.Header().Get("Location")
+			assertAllowlistedRedirectLocation(t, loc)
 			u, err := url.Parse(loc)
 			if err != nil {
 				t.Fatalf("invalid Location header %q: %v", loc, err)
