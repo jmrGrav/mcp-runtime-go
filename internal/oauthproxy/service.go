@@ -42,6 +42,8 @@ type Service struct {
 	proxy        *httputil.ReverseProxy
 }
 
+var newPurgeTicker = time.NewTicker
+
 func NewService(cfg *config.Config, store storage.Store, audit *observability.AuditLogger, httpClient *http.Client) (*Service, error) {
 	tokens, err := store.Load()
 	if err != nil {
@@ -124,7 +126,7 @@ func (s *Service) PurgeExpired() {
 // StartPurgeLoop runs the periodic expiry sweep until ctx is cancelled.
 // The caller must cancel ctx before calling Close to avoid a store write after Close.
 func (s *Service) StartPurgeLoop(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Hour)
+	ticker := newPurgeTicker(1 * time.Hour)
 	defer ticker.Stop()
 	for {
 		select {
@@ -147,12 +149,6 @@ func (s *Service) GetAuthCode(code string) (AuthCode, bool) {
 	defer s.codesMu.RUnlock()
 	data, ok := s.authCodes[code]
 	return data, ok
-}
-
-func (s *Service) RemoveAuthCode(code string) {
-	s.codesMu.Lock()
-	defer s.codesMu.Unlock()
-	delete(s.authCodes, code)
 }
 
 func (s *Service) ConsumeAuthCode(code string) (AuthCode, bool) {

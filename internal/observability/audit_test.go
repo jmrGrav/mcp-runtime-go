@@ -3,6 +3,7 @@ package observability
 import (
 	"encoding/json"
 	"log/slog"
+	mcpctx "mcp-runtime-go/internal/context"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ func TestAuditLogger_Log(t *testing.T) {
 	logger := NewAuditLogger(logPath)
 
 	req := httptest.NewRequest("GET", "/", nil)
+	req = req.WithContext(mcpctx.WithRequestID(req.Context(), "test-rid"))
 	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
 	req.Header.Set("User-Agent", strings.Repeat("a", 300))
 
@@ -41,6 +43,9 @@ func TestAuditLogger_Log(t *testing.T) {
 	}
 	if entry["src_ip"] != "1.2.3.4" {
 		t.Errorf("expected src_ip 1.2.3.4, got %v", entry["src_ip"])
+	}
+	if entry["request_id"] != "test-rid" {
+		t.Errorf("expected request_id test-rid, got %v", entry["request_id"])
 	}
 	if ua := entry["ua"].(string); len(ua) != 200 {
 		t.Errorf("expected UA length 200, got %d", len(ua))
@@ -121,6 +126,47 @@ func TestAuditLogger_RedactsSensitiveValuesInGenericFields(t *testing.T) {
 	}
 }
 
+func TestAuditLogger_RedactsSliceAndNonString(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "audit.log")
+	logger := NewAuditLogger(logPath)
+
+	fields := map[string]interface{}{
+		"list": []interface{}{
+			"Bearer secret123",
+			map[string]interface{}{"code_verifier": "v123"},
+			123, // Non-string should be preserved
+		},
+		"auth_code": 456, // Sensitive key but non-string value, should still redact based on key
+	}
+
+	logger.LogWithIP("test_event", "", nil, fields)
+
+	data, _ := os.ReadFile(logPath)
+	var entry map[string]interface{}
+	json.Unmarshal(data, &entry)
+
+	list := entry["list"].([]interface{})
+	if list[0] != "[REDACTED]" {
+		t.Errorf("expected list[0] redacted, got %v", list[0])
+	}
+	if list[1].(map[string]interface{})["code_verifier"] != "[REDACTED]" {
+		t.Errorf("expected list[1].code_verifier redacted")
+	}
+	if list[2] != float64(123) {
+		t.Errorf("expected list[2] preserved as number, got %v", list[2])
+	}
+	if entry["auth_code"] != "[REDACTED]" {
+		t.Errorf("expected auth_code key to redact regardless of value type")
+	}
+}
+
+func TestAuditLogger_EmptyPath(t *testing.T) {
+	logger := NewAuditLogger("")
+	// Should not panic or error
+	logger.LogWithIP("event", "1.2.3.4", nil, nil)
+}
+
 func TestAuditLogger_NoRequest(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "audit.log")
@@ -138,6 +184,45 @@ func TestAuditLogger_NoRequest(t *testing.T) {
 
 	if entry["src_ip"] != nil {
 		t.Error("src_ip should be nil when request is nil")
+	}
+}
+
+func TestAuditLogger_RemoteAddrFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "audit.log")
+	logger := NewAuditLogger(logPath)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "9.8.7.6:1234"
+	logger.LogWithIP("event", "", req, nil)
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read log: %v", err)
+	}
+
+	var entry map[string]interface{}
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatalf("failed to unmarshal log entry: %v", err)
+	}
+
+	if entry["src_ip"] != "9.8.7.6:1234" {
+		t.Fatalf("expected src_ip fallback to RemoteAddr, got %v", entry["src_ip"])
+	}
+}
+
+func TestAuditLogger_MarshalError(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "audit.log")
+	logger := NewAuditLogger(logPath)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	logger.LogWithIP("event", "1.2.3.4", req, map[string]interface{}{
+		"bad": make(chan int),
+	})
+
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no log file on marshal failure, got err=%v", err)
 	}
 }
 
@@ -197,6 +282,51 @@ func TestAuditLogger_WriteFailureIncrementsCounter(t *testing.T) {
 	if AuditWriteFailures.Get() <= before {
 		t.Error("expected AuditWriteFailures counter to increment on write failure")
 	}
+}
+
+func TestAuditLogger_WriteAndNewlineFailures(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "audit.log")
+	logger := NewAuditLogger(logPath)
+	req := httptest.NewRequest("GET", "/", nil)
+
+	origWrite := auditWrite
+	t.Cleanup(func() { auditWrite = origWrite })
+
+	t.Run("write failure", func(t *testing.T) {
+		calls := 0
+		auditWrite = func(_ *os.File, _ []byte) (int, error) {
+			calls++
+			return 0, os.ErrInvalid
+		}
+		before := AuditWriteFailures.Get()
+		logger.LogWithIP("event", "1.2.3.4", req, nil)
+		if calls != 1 {
+			t.Fatalf("expected one write attempt, got %d", calls)
+		}
+		if AuditWriteFailures.Get() <= before {
+			t.Fatal("expected write failure counter increment")
+		}
+	})
+
+	t.Run("newline failure", func(t *testing.T) {
+		calls := 0
+		auditWrite = func(_ *os.File, _ []byte) (int, error) {
+			calls++
+			if calls == 1 {
+				return 1, nil
+			}
+			return 0, os.ErrInvalid
+		}
+		before := AuditWriteFailures.Get()
+		logger.LogWithIP("event", "1.2.3.4", req, nil)
+		if calls != 2 {
+			t.Fatalf("expected two write attempts, got %d", calls)
+		}
+		if AuditWriteFailures.Get() <= before {
+			t.Fatal("expected newline failure counter increment")
+		}
+	})
 }
 
 func TestLogger_DefaultNotNil(t *testing.T) {

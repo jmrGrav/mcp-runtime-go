@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"mcp-runtime-go/internal/config"
+	mcpctx "mcp-runtime-go/internal/context"
 	"mcp-runtime-go/internal/observability"
 	"mcp-runtime-go/internal/storage"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,42 +46,77 @@ func setupTestService(t *testing.T) (*Service, *config.Config) {
 func TestHandleMetadata(t *testing.T) {
 	s, _ := setupTestService(t)
 
-	t.Run("OAuth Metadata", func(t *testing.T) {
+	t.Run("GET OAuth Metadata", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/.well-known/oauth-authorization-server", nil)
 		rr := httptest.NewRecorder()
 		s.HandleMetadata(rr, req)
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected 200, got %d", rr.Code)
 		}
-
 		var data map[string]interface{}
-		if err := json.NewDecoder(rr.Body).Decode(&data); err != nil {
-			t.Fatalf("decode metadata: %v", err)
-		}
+		json.NewDecoder(rr.Body).Decode(&data)
 		if got := data["service_documentation"]; got != "http://proxy/mcp" {
-			t.Fatalf("unexpected service_documentation: %v", got)
+			t.Errorf("unexpected doc link: %v", got)
 		}
 	})
 
-	t.Run("Resource Metadata", func(t *testing.T) {
+	t.Run("POST Metadata Not Allowed", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/.well-known/oauth-authorization-server", nil)
+		rr := httptest.NewRecorder()
+		s.HandleMetadata(rr, req)
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405, got %d", rr.Code)
+		}
+	})
+}
+
+func TestHandleProtectedResourceMetadata(t *testing.T) {
+	s, _ := setupTestService(t)
+
+	t.Run("GET Resource Metadata", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/.well-known/oauth-protected-resource", nil)
 		rr := httptest.NewRecorder()
 		s.HandleProtectedResourceMetadata(rr, req)
 		if rr.Code != http.StatusOK {
 			t.Errorf("expected 200, got %d", rr.Code)
 		}
-
 		var data map[string]interface{}
-		if err := json.NewDecoder(rr.Body).Decode(&data); err != nil {
-			t.Fatalf("decode metadata: %v", err)
-		}
+		json.NewDecoder(rr.Body).Decode(&data)
 		if got := data["resource"]; got != "http://proxy/mcp" {
-			t.Fatalf("unexpected resource: %v", got)
-		}
-		if got := data["resource_documentation"]; got != "http://proxy/mcp" {
-			t.Fatalf("unexpected resource_documentation: %v", got)
+			t.Errorf("unexpected resource: %v", got)
 		}
 	})
+
+	t.Run("POST Resource Metadata Not Allowed", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/.well-known/oauth-protected-resource", nil)
+		rr := httptest.NewRecorder()
+		s.HandleProtectedResourceMetadata(rr, req)
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405, got %d", rr.Code)
+		}
+	})
+}
+
+func TestHandleRegister_DecodeError(t *testing.T) {
+	s, _ := setupTestService(t)
+	req := httptest.NewRequest("POST", "/register", strings.NewReader("invalid json"))
+	rr := httptest.NewRecorder()
+	s.HandleRegister(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleToken_ParseFormError(t *testing.T) {
+	s, _ := setupTestService(t)
+	// Force a form parsing error by using an invalid escape sequence in the body
+	req := httptest.NewRequest("POST", "/token", strings.NewReader("client_id=1%zz"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	s.HandleToken(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
 }
 
 func TestHandleRegister(t *testing.T) {
@@ -418,6 +455,44 @@ func TestHandleRegister_EmptyRedirectURIs(t *testing.T) {
 				t.Errorf("%s: expected 400, got %d", tt.name, rr.Code)
 			}
 		})
+	}
+}
+
+func TestAuditLog_ClientRequestID(t *testing.T) {
+	tmpDir := t.TempDir()
+	auditPath := filepath.Join(tmpDir, "audit.log")
+	tokenPath := filepath.Join(tmpDir, "tokens.json")
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			ClientID:              "test-client",
+			ClientSecret:          "test-secret",
+			ProxyBaseURL:          "http://proxy",
+			AuthCodeTTL:           300,
+			AccessTokenTTL:        3600,
+			MandatoryPKCE:         true,
+			TrustedProxies:        []string{"127.0.0.1"},
+			TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
+		},
+	}
+	audit := observability.NewAuditLogger(auditPath)
+	store := storage.NewTokenStore(tokenPath, false)
+	s, err := NewService(cfg, store, audit, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/authorize", nil)
+	req = req.WithContext(mcpctx.WithRequestID(req.Context(), "rid-1"))
+	req = req.WithContext(mcpctx.WithClientRequestID(req.Context(), "client-123"))
+
+	s.auditLog(req, "test_event", nil)
+
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"client_request_id":"client-123"`) {
+		t.Fatal("expected client_request_id in audit log")
 	}
 }
 

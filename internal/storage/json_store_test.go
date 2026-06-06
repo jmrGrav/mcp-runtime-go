@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,6 +79,23 @@ func TestTokenStore_CorruptionRecovery(t *testing.T) {
 	})
 }
 
+func TestTokenStore_CorruptionRecovery_BackupRenameError(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.json")
+	if err := os.WriteFile(path, []byte("invalid json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tmpDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(tmpDir, 0755)
+
+	store := NewTokenStore(path, true)
+	if _, err := store.Load(); err == nil {
+		t.Fatal("expected backup rename error")
+	}
+}
+
 func TestTokenStore_EmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "empty.json")
@@ -123,6 +141,112 @@ func TestTokenStore_SaveError(t *testing.T) {
 	err := store.Save(map[string]float64{"t": 123})
 	if err == nil {
 		t.Error("expected error when saving to read-only directory")
+	}
+}
+
+func TestTokenStore_Save_RenameError(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.json")
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewTokenStore(path, false)
+	err := store.Save(map[string]float64{"t": float64(time.Now().Add(time.Hour).Unix())})
+	if err == nil {
+		t.Fatal("expected rename error")
+	}
+}
+
+func TestTokenStore_Save_ParentOpenError(t *testing.T) {
+	tmpDir := t.TempDir()
+	dir := filepath.Join(tmpDir, "locked")
+	if err := os.Mkdir(dir, 0333); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0755)
+
+	store := NewTokenStore(filepath.Join(dir, "tokens.json"), false)
+	err := store.Save(map[string]float64{"t": float64(time.Now().Add(time.Hour).Unix())})
+	if err == nil {
+		t.Fatal("expected parent directory open error")
+	}
+}
+
+func TestTokenStore_Save_ParentOpenError_Seam(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.json")
+
+	origOpenDir := openDirFn
+	t.Cleanup(func() { openDirFn = origOpenDir })
+	openDirFn = func(string) (*os.File, error) {
+		return nil, os.ErrInvalid
+	}
+
+	store := NewTokenStore(path, false)
+	err := store.Save(map[string]float64{"t": float64(time.Now().Add(time.Hour).Unix())})
+	if err == nil {
+		t.Fatal("expected parent open seam error")
+	}
+}
+
+func TestTokenStore_Save_ParentSyncError_Seam(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.json")
+
+	origSync := syncFileFn
+	t.Cleanup(func() { syncFileFn = origSync })
+	syncFileFn = func(*os.File) error {
+		return os.ErrInvalid
+	}
+
+	store := NewTokenStore(path, false)
+	err := store.Save(map[string]float64{"t": float64(time.Now().Add(time.Hour).Unix())})
+	if err == nil {
+		t.Fatal("expected parent sync seam error")
+	}
+}
+
+func TestTokenStore_Save_MarshalError(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.json")
+	store := NewTokenStore(path, false)
+
+	err := store.Save(map[string]float64{
+		"bad": math.Inf(1),
+	})
+	if err == nil {
+		t.Fatal("expected marshal error for NaN")
+	}
+}
+
+func TestTokenStore_Save_WriteError(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.json")
+	tmpTarget := filepath.Join(tmpDir, "tokens.json.tmp")
+	if err := os.Symlink("/dev/full", tmpTarget); err != nil {
+		t.Fatal(err)
+	}
+	store := NewTokenStore(path, false)
+
+	err := store.Save(map[string]float64{"t": float64(time.Now().Add(time.Hour).Unix())})
+	if err == nil {
+		t.Fatal("expected write error")
+	}
+}
+
+func TestTokenStore_Save_SyncError(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "tokens.json")
+	tmpTarget := filepath.Join(tmpDir, "tokens.json.tmp")
+	if err := os.Symlink("/dev/null", tmpTarget); err != nil {
+		t.Fatal(err)
+	}
+	store := NewTokenStore(path, false)
+
+	err := store.Save(map[string]float64{"t": float64(time.Now().Add(time.Hour).Unix())})
+	if err == nil {
+		t.Fatal("expected fsync error")
 	}
 }
 
@@ -210,5 +334,12 @@ func TestTokenStore_Save_ParentSyncError(t *testing.T) {
 	err := store.Save(map[string]float64{"t": 123})
 	if err == nil {
 		t.Error("expected error when parent directory is not openable")
+	}
+}
+
+func TestTokenStore_Close(t *testing.T) {
+	store := NewTokenStore("/tmp/tokens.json", false)
+	if err := store.Close(); err != nil {
+		t.Errorf("Close failed: %v", err)
 	}
 }

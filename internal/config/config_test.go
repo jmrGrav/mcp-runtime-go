@@ -73,6 +73,51 @@ func TestValidate(t *testing.T) {
 			true,
 		},
 		{
+			"Invalid HUGO_MCP_URL no host",
+			Config{
+				OAuthProxy: OAuthProxyConfig{
+					ClientID:       "id",
+					ClientSecret:   "secret",
+					HugoToken:      "token",
+					HugoMCPURL:     "http:///api/mcp",
+					ProxyBaseURL:   "https://example.com",
+					AuthCodeTTL:    300,
+					AccessTokenTTL: 86400,
+				},
+			},
+			true,
+		},
+		{
+			"Invalid PROXY_BASE_URL",
+			Config{
+				OAuthProxy: OAuthProxyConfig{
+					ClientID:       "id",
+					ClientSecret:   "secret",
+					HugoToken:      "token",
+					HugoMCPURL:     "http://127.0.0.1/api/mcp",
+					ProxyBaseURL:   "://invalid",
+					AuthCodeTTL:    300,
+					AccessTokenTTL: 86400,
+				},
+			},
+			true,
+		},
+		{
+			"Empty HUGO_MCP_URL",
+			Config{
+				OAuthProxy: OAuthProxyConfig{
+					ClientID:       "id",
+					ClientSecret:   "secret",
+					HugoToken:      "token",
+					HugoMCPURL:     "",
+					ProxyBaseURL:   "https://example.com",
+					AuthCodeTTL:    300,
+					AccessTokenTTL: 86400,
+				},
+			},
+			true,
+		},
+		{
 			"Zero AuthCodeTTL",
 			Config{
 				OAuthProxy: OAuthProxyConfig{
@@ -188,6 +233,18 @@ func TestLoad_InvalidPort(t *testing.T) {
 	}
 }
 
+func TestLoad_ValidationError(t *testing.T) {
+	t.Setenv("CLIENT_ID", "id")
+	t.Setenv("CLIENT_SECRET", "secret")
+	t.Setenv("HUGO_TOKEN", "token")
+	t.Setenv("HUGO_MCP_URL", "http://")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected validation error from Load")
+	}
+}
+
 func TestBindEnv_InvalidBoolFails(t *testing.T) {
 	type testConfig struct {
 		Bool bool `env:"TEST_BOOL" envDefault:"false"`
@@ -202,6 +259,32 @@ func TestBindEnv_InvalidBoolFails(t *testing.T) {
 	}
 }
 
+func TestBindEnv_SkipsUntaggedField(t *testing.T) {
+	type testConfig struct {
+		Tagged   string `env:"TEST_TAGGED" envDefault:"value"`
+		Skipped  string
+		Override string `env:"TEST_OVERRIDE"`
+	}
+
+	t.Setenv("TEST_TAGGED", "set")
+	t.Setenv("TEST_OVERRIDE", "override")
+
+	c := &testConfig{}
+	if err := bindEnv(c); err != nil {
+		t.Fatal(err)
+	}
+
+	if c.Tagged != "set" {
+		t.Fatalf("expected tagged field to be populated, got %q", c.Tagged)
+	}
+	if c.Skipped != "" {
+		t.Fatalf("expected untagged field to remain empty, got %q", c.Skipped)
+	}
+	if c.Override != "override" {
+		t.Fatalf("expected override field to be populated, got %q", c.Override)
+	}
+}
+
 func TestBindEnv_EmptyBoolFailsWhenSet(t *testing.T) {
 	type testConfig struct {
 		Bool bool `env:"TEST_BOOL" envDefault:"true"`
@@ -213,5 +296,19 @@ func TestBindEnv_EmptyBoolFailsWhenSet(t *testing.T) {
 	c := &testConfig{}
 	if err := bindEnv(c); err == nil {
 		t.Fatal("expected error for explicit empty boolean value")
+	}
+}
+
+func TestBindEnv_InvalidInt(t *testing.T) {
+	type testConfig struct {
+		Int int `env:"TEST_INT" envDefault:"0"`
+	}
+
+	os.Setenv("TEST_INT", "not-an-int")
+	defer os.Unsetenv("TEST_INT")
+
+	c := &testConfig{}
+	if err := bindEnv(c); err == nil {
+		t.Fatal("expected error for invalid int value")
 	}
 }
