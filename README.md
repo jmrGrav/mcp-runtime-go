@@ -65,6 +65,24 @@ Legacy `GRAV_*` variables remain compatibility fallbacks only.
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for installation, systemd, OpenResty / CrowdSec
 notes, health checks, metrics, logs, logrotate, backup, rollback, and SQLite migration.
 
+## Security & Quality Gates
+
+Release validation is enforced by the CI workflow and documented in:
+
+- [docs/CI_SECURITY_AUDIT.md](docs/CI_SECURITY_AUDIT.md)
+- [docs/RELEASE_GATES.md](docs/RELEASE_GATES.md)
+
+The gate includes:
+
+- `go test ./...`
+- `go test -race ./...`
+- `go vet ./...`
+- `govulncheck ./...`
+- `gitleaks detect`
+- `gitleaks git`
+- `trufflehog git file://.`
+- Linux `amd64` and `arm64` builds with `CGO_ENABLED=0`
+
 ## Roadmap
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for current status, remaining debt, and next steps.
