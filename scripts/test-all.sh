@@ -15,6 +15,5 @@ go tool cover -func=coverage.out
 
 echo "Building binaries..."
 go build -o bin/mcp-runtime ./cmd/mcp-runtime
-go build -o bin/shadow-compare ./cmd/shadow-compare
 
 echo "All checks passed!"

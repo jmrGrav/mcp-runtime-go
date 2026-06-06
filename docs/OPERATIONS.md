@@ -129,7 +129,7 @@ Rollback from migration:
 ## Rollback
 
 Current production rollback is back to the authoritative state that was last validated.
-Use the archived rollback notes if you need the historical shadow-era procedure.
+Use the archived rollback notes if you need additional historical context.
 
 Practical rollback checklist:
 
@@ -145,4 +145,3 @@ Practical rollback checklist:
 - `/authorize` failures are often edge policy or trusted proxy issues, not application bugs.
 - Metrics may be healthy locally even when public routing is broken.
 - An audit write failure should be treated as a production issue, not a warning to ignore.
-- Shadow-mode documentation is historical; do not follow it for current production changes.

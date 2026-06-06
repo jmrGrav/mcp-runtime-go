@@ -1,7 +1,6 @@
 # Compiled binaries (root-level, anchored so cmd/ subdirs are not excluded)
 bin/
 /mcp-runtime
-/shadow-compare
 
 # Test coverage
 coverage*.out

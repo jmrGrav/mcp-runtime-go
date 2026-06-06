@@ -35,10 +35,6 @@ func NewApp(cfg *config.Config) (*App, error) {
 		level = slog.LevelWarn
 	case "error":
 		level = slog.LevelError
-	default:
-		if cfg.Runtime.ShadowMode {
-			level = slog.LevelDebug
-		}
 	}
 	observability.InitLogger(level)
 

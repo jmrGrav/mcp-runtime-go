@@ -40,11 +40,8 @@ Already present as convenience targets:
 Current scripts are operational helpers:
 
 - `scripts/test-all.sh`
-- `scripts/shadow-compare-48h.sh`
-- `scripts/shadow-status.sh`
-- `scripts/healthcheck-shadow.sh`
 
-Only `scripts/test-all.sh` overlaps with validation concerns. The shadow scripts are historical.
+Only `scripts/test-all.sh` overlaps with validation concerns.
 
 ### Release Documentation
 
