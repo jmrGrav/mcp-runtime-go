@@ -34,6 +34,7 @@ type OAuthProxyConfig struct {
 	AllowTokenStoreRecovery bool     `env:"ALLOW_TOKEN_STORE_RECOVERY" envDefault:"false"`
 	AnonymousEnabled        bool     `env:"ANONYMOUS_ENABLED" envDefault:"false"`
 	AnonymousPublicTools    []string `env:"ANONYMOUS_PUBLIC_TOOLS" envDefault:""`
+	AuthenticatedScopeTools string   `env:"AUTHENTICATED_SCOPE_TOOLS" envDefault:""`
 }
 
 type RuntimeConfig struct {

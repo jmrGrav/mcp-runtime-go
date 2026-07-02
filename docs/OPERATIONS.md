@@ -40,6 +40,7 @@ Common production settings:
 - `ALLOW_TOKEN_STORE_RECOVERY=false`
 - `ANONYMOUS_ENABLED=false`
 - `ANONYMOUS_PUBLIC_TOOLS=`
+- `AUTHENTICATED_SCOPE_TOOLS=`
 
 Legacy `GRAV_*` variables are supported only as compatibility fallback.
 
@@ -66,6 +67,30 @@ Behavior:
 Do not enable this mode in front of an administrative MCP backend unless every
 write-capable tool is excluded from the public allowlist and separately tested.
 
+## Optional OAuth for Public Read-Only MCP
+
+For a public read-only MCP deployment, OAuth can be enabled without making it
+mandatory for anonymous users.
+
+Recommended production-candidate policy for `hugo-public-mcp`:
+
+```bash
+ANONYMOUS_ENABLED=true
+ANONYMOUS_PUBLIC_TOOLS=list_pages,get_page,search_pages,get_recent_posts,list_tags,list_categories,get_sitemap,get_feed,get_site_information
+AUTHENTICATED_SCOPE_TOOLS=mcp:list_pages|get_page|search_pages|get_recent_posts|list_tags|list_categories|get_sitemap|get_feed|get_site_information
+```
+
+Behavior:
+
+- requests without an `Authorization` header use the anonymous public allowlist;
+- requests with a valid bearer token use the `mcp` scope tool ACL;
+- requests with an invalid bearer token receive `401` with `WWW-Authenticate`;
+- no private or write tools are exposed by this policy.
+
+This keeps OAuth optional and truthful. It advertises a real Authorization Code
++ PKCE flow and Dynamic Client Registration, but it does not invent private
+capabilities or make OAuth a prerequisite for public content access.
+
 ## Systemd
 
 The service is expected to run as a hardened unit with:
@@ -89,6 +114,10 @@ systemctl cat mcp-runtime
 - Public traffic flows through Cloudflare and OpenResty.
 - CrowdSec / OpenResty controls may block at the edge before Go sees the request.
 - `/authorize` is intentionally restricted to trusted operator IPs.
+- Do not use `TRUSTED_AUTHORIZE_CIDRS=0.0.0.0/0,::/0` outside short-lived
+  interoperability tests. A production candidate should restrict `/authorize`
+  to explicit operator/admin source ranges until a real public consent model is
+  designed.
 - If a request is blocked at the edge, check the OpenResty access/error logs and CrowdSec decisions.
 
 ## Health and Metrics

@@ -17,7 +17,7 @@ import (
 
 const anonymousInspectionLimitBytes = 1 << 20
 
-type anonymousToolsListContextKey struct{}
+type toolsListFilterContextKey struct{}
 
 func appendSubPath(ctx context.Context, subPath string) context.Context {
 	return context.WithValue(ctx, subPathContextKey{}, subPath)
@@ -81,11 +81,11 @@ func (s *Service) buildReverseProxy() *httputil.ReverseProxy {
 		},
 		Transport: s.httpClient.Transport,
 		ModifyResponse: func(resp *http.Response) error {
-			anonymousToolsList, _ := resp.Request.Context().Value(anonymousToolsListContextKey{}).(bool)
-			if !anonymousToolsList {
+			allowedTools, _ := resp.Request.Context().Value(toolsListFilterContextKey{}).([]string)
+			if len(allowedTools) == 0 {
 				return nil
 			}
-			return s.filterAnonymousToolsListResponse(resp)
+			return filterToolsListResponse(resp, allowedTools)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.auditLog(r, "proxy_error", map[string]interface{}{"error": err.Error()})
@@ -108,6 +108,13 @@ func (s *Service) HandleProxy(w http.ResponseWriter, r *http.Request) {
 			s.unauthorized(w, "Invalid or expired token")
 			return
 		}
+		allowed, toolsList := s.allowAuthenticatedMCPRequest(w, r)
+		if !allowed {
+			return
+		}
+		if toolsList {
+			r = r.WithContext(context.WithValue(r.Context(), toolsListFilterContextKey{}, s.authenticatedAllowedToolsForScope(mcpScope)))
+		}
 	} else if !s.cfg.OAuthProxy.AnonymousEnabled {
 		s.unauthorized(w, "Bearer token required")
 		return
@@ -117,7 +124,7 @@ func (s *Service) HandleProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if toolsList {
-			r = r.WithContext(context.WithValue(r.Context(), anonymousToolsListContextKey{}, true))
+			r = r.WithContext(context.WithValue(r.Context(), toolsListFilterContextKey{}, s.cfg.OAuthProxy.AnonymousPublicTools))
 		}
 	}
 
@@ -249,8 +256,120 @@ func (s *Service) anonymousMessageAllowed(raw []byte) (allowed bool, toolsList b
 	}
 }
 
+func (s *Service) allowAuthenticatedMCPRequest(w http.ResponseWriter, r *http.Request) (allowed bool, toolsList bool) {
+	allowedTools := s.authenticatedAllowedToolsForScope(mcpScope)
+	if len(allowedTools) == 0 {
+		return true, false
+	}
+	if r.Method != http.MethodPost {
+		s.auditLog(r, "authenticated_proxy_rejected", map[string]interface{}{"reason": "method_not_allowed", "method": r.Method})
+		http.Error(w, "authenticated scoped MCP requires POST", http.StatusMethodNotAllowed)
+		return false, false
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, anonymousInspectionLimitBytes))
+	if err != nil {
+		s.auditLog(r, "authenticated_proxy_rejected", map[string]interface{}{"reason": "body_too_large_or_unreadable"})
+		http.Error(w, "invalid authenticated MCP request", http.StatusBadRequest)
+		return false, false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	allowed, toolsList, reason := payloadAllowedForTools(body, allowedTools)
+	if !allowed {
+		s.auditLog(r, "authenticated_proxy_rejected", map[string]interface{}{"reason": reason})
+		http.Error(w, "authenticated MCP request is outside token scope", http.StatusForbidden)
+		return false, false
+	}
+
+	return true, toolsList
+}
+
+func (s *Service) authenticatedAllowedToolsForScope(scope string) []string {
+	return toolsForScope(s.cfg.OAuthProxy.AuthenticatedScopeTools, scope)
+}
+
+func toolsForScope(raw, scope string) []string {
+	for _, entry := range strings.Split(raw, ";") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		scopeName, toolsRaw, ok := strings.Cut(entry, ":")
+		if !ok {
+			scopeName, toolsRaw, ok = strings.Cut(entry, "=")
+		}
+		if !ok || strings.TrimSpace(scopeName) != scope {
+			continue
+		}
+		var tools []string
+		for _, tool := range strings.FieldsFunc(toolsRaw, func(r rune) bool {
+			return r == '|' || r == ','
+		}) {
+			tool = strings.TrimSpace(tool)
+			if tool != "" {
+				tools = append(tools, tool)
+			}
+		}
+		return tools
+	}
+	return nil
+}
+
+func payloadAllowedForTools(body []byte, allowedTools []string) (allowed bool, toolsList bool, reason string) {
+	var batch []json.RawMessage
+	if err := json.Unmarshal(body, &batch); err == nil {
+		if len(batch) == 0 {
+			return false, false, "empty_batch"
+		}
+		containsToolsList := false
+		for _, raw := range batch {
+			ok, isToolsList, reason := messageAllowedForTools(raw, allowedTools)
+			if !ok {
+				return false, false, reason
+			}
+			containsToolsList = containsToolsList || isToolsList
+		}
+		return true, containsToolsList, ""
+	}
+
+	return messageAllowedForTools(body, allowedTools)
+}
+
+func messageAllowedForTools(raw []byte, allowedTools []string) (allowed bool, toolsList bool, reason string) {
+	var msg jsonRPCRequest
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return false, false, "invalid_json"
+	}
+
+	switch msg.Method {
+	case "initialize", "notifications/initialized", "ping":
+		return true, false, ""
+	case "tools/list":
+		return true, true, ""
+	case "tools/call":
+		var params toolCallParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			return false, false, "invalid_tool_call_params"
+		}
+		if params.Name == "" {
+			return false, false, "missing_tool_name"
+		}
+		if toolAllowed(params.Name, allowedTools) {
+			return true, false, ""
+		}
+		return false, false, "tool_outside_scope"
+	default:
+		return false, false, "method_outside_scope"
+	}
+}
+
 func (s *Service) isAnonymousPublicTool(name string) bool {
-	for _, tool := range s.cfg.OAuthProxy.AnonymousPublicTools {
+	return toolAllowed(name, s.cfg.OAuthProxy.AnonymousPublicTools)
+}
+
+func toolAllowed(name string, allowedTools []string) bool {
+	for _, tool := range allowedTools {
 		if tool == name {
 			return true
 		}
@@ -258,7 +377,7 @@ func (s *Service) isAnonymousPublicTool(name string) bool {
 	return false
 }
 
-func (s *Service) filterAnonymousToolsListResponse(resp *http.Response) error {
+func filterToolsListResponse(resp *http.Response, allowedTools []string) error {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, anonymousInspectionLimitBytes+1))
 	if err != nil {
 		return err
@@ -267,20 +386,20 @@ func (s *Service) filterAnonymousToolsListResponse(resp *http.Response) error {
 		return err
 	}
 	if len(body) > anonymousInspectionLimitBytes {
-		return fmt.Errorf("anonymous tools/list response exceeds inspection limit")
+		return fmt.Errorf("tools/list response exceeds inspection limit")
 	}
 
-	filtered := s.filterAnonymousToolsListBody(body)
+	filtered := filterToolsListBody(body, allowedTools)
 	resp.Body = io.NopCloser(bytes.NewReader(filtered))
 	resp.ContentLength = int64(len(filtered))
 	resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(filtered)))
 	return nil
 }
 
-func (s *Service) filterAnonymousToolsListBody(body []byte) []byte {
+func filterToolsListBody(body []byte, allowedTools []string) []byte {
 	var value interface{}
 	if err := json.Unmarshal(body, &value); err == nil {
-		s.filterAnonymousToolsListJSON(value)
+		filterToolsListJSON(value, allowedTools)
 		if filtered, err := json.Marshal(value); err == nil {
 			return filtered
 		}
@@ -297,7 +416,7 @@ func (s *Service) filterAnonymousToolsListBody(body []byte) []byte {
 		if err := json.Unmarshal(data, &event); err != nil {
 			continue
 		}
-		s.filterAnonymousToolsListJSON(event)
+		filterToolsListJSON(event, allowedTools)
 		filtered, err := json.Marshal(event)
 		if err != nil {
 			continue
@@ -307,11 +426,11 @@ func (s *Service) filterAnonymousToolsListBody(body []byte) []byte {
 	return bytes.Join(lines, []byte("\n"))
 }
 
-func (s *Service) filterAnonymousToolsListJSON(value interface{}) {
+func filterToolsListJSON(value interface{}, allowedTools []string) {
 	switch typed := value.(type) {
 	case []interface{}:
 		for _, item := range typed {
-			s.filterAnonymousToolsListJSON(item)
+			filterToolsListJSON(item, allowedTools)
 		}
 	case map[string]interface{}:
 		result, ok := typed["result"].(map[string]interface{})
@@ -329,7 +448,7 @@ func (s *Service) filterAnonymousToolsListJSON(value interface{}) {
 				continue
 			}
 			name, ok := toolObj["name"].(string)
-			if ok && s.isAnonymousPublicTool(name) {
+			if ok && toolAllowed(name, allowedTools) {
 				filtered = append(filtered, tool)
 			}
 		}

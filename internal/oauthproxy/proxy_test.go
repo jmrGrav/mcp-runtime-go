@@ -371,6 +371,105 @@ func TestHandleProxy_AnonymousToolsListFiltersServerSentEvents(t *testing.T) {
 	}
 }
 
+func TestHandleProxy_AuthenticatedScopeToolsRestrictToolCalls(t *testing.T) {
+	var backendHits int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendHits++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+	}))
+	defer backend.Close()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			HugoMCPURL:              backend.URL,
+			HugoToken:               "test-token",
+			ClientID:                "hugo-mcp",
+			AuthenticatedScopeTools: "mcp:search_posts|read_page",
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+	s, _ := NewService(cfg, store, audit, nil)
+	s.AddAccessToken("valid-token", time.Now().Add(1*time.Hour))
+
+	t.Run("allowed scope tool is proxied with valid bearer token", func(t *testing.T) {
+		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_posts","arguments":{"q":"hugo"}}}`)
+		req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer valid-token")
+		rr := httptest.NewRecorder()
+
+		s.HandleProxy(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+		}
+		if backendHits != 1 {
+			t.Fatalf("expected backend to be hit once, got %d", backendHits)
+		}
+	})
+
+	t.Run("disallowed scope tool is rejected before backend", func(t *testing.T) {
+		before := backendHits
+		body := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"publish_post","arguments":{}}}`)
+		req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer valid-token")
+		rr := httptest.NewRecorder()
+
+		s.HandleProxy(rr, req)
+
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+		}
+		if backendHits != before {
+			t.Fatalf("backend was hit for forbidden authenticated tool")
+		}
+	})
+}
+
+func TestHandleProxy_AuthenticatedScopeToolsFilterToolsList(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_posts"},{"name":"publish_post"}]}}`))
+	}))
+	defer backend.Close()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			HugoMCPURL:              backend.URL,
+			HugoToken:               "test-token",
+			ClientID:                "hugo-mcp",
+			AuthenticatedScopeTools: "mcp:search_posts",
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+	s, _ := NewService(cfg, store, audit, nil)
+	s.AddAccessToken("valid-token", time.Now().Add(1*time.Hour))
+
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rr := httptest.NewRecorder()
+
+	s.HandleProxy(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"search_posts"`) {
+		t.Fatalf("allowed scope tool missing from response: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "publish_post") {
+		t.Fatalf("tool outside scope leaked in authenticated tools/list: %s", rr.Body.String())
+	}
+}
+
 func TestHandleProxy_BackendMissing(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{

@@ -57,6 +57,22 @@ func TestLoad_AnonymousMCPConfig(t *testing.T) {
 	}
 }
 
+func TestLoad_AuthenticatedScopeToolsConfig(t *testing.T) {
+	t.Setenv("CLIENT_ID", "test-client")
+	t.Setenv("CLIENT_SECRET", "test-secret")
+	t.Setenv("HUGO_TOKEN", "test-token")
+	t.Setenv("AUTHENTICATED_SCOPE_TOOLS", "mcp:list_pages|get_page|search_pages")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.OAuthProxy.AuthenticatedScopeTools != "mcp:list_pages|get_page|search_pages" {
+		t.Fatalf("authenticated scope tools = %q", cfg.OAuthProxy.AuthenticatedScopeTools)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string

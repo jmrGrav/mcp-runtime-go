@@ -69,6 +69,43 @@ This mode is intended for public read-only MCP servers. It must not be used in
 front of a backend that exposes write or administrative tools unless every
 publicly callable tool is intentionally allowlisted and tested.
 
+## Optional OAuth Scope-to-Tool ACL
+
+OAuth is optional for public read-only deployments. Anonymous requests can keep
+using the public read-only surface, while agents that present a valid bearer
+token may be constrained by a scope-to-tool ACL.
+
+Configure the ACL with `AUTHENTICATED_SCOPE_TOOLS`:
+
+```text
+AUTHENTICATED_SCOPE_TOOLS=mcp:list_pages|get_page|search_pages|get_recent_posts|list_tags|list_categories|get_sitemap|get_feed|get_site_information
+```
+
+Semantics:
+
+- if `AUTHENTICATED_SCOPE_TOOLS` is empty, valid bearer tokens retain the legacy
+  proxy behavior;
+- if a `mcp` mapping is present, valid bearer tokens may call only the listed
+  `tools/call` names;
+- authenticated `tools/list` responses are filtered to advertise only the tools
+  allowed by the scope;
+- protocol setup methods (`initialize`, `notifications/initialized`, `ping`)
+  remain allowed;
+- methods outside that narrow MCP surface are rejected before the backend is
+  reached.
+
+For `hugo-public-mcp`, the production candidate model is:
+
+- anonymous read-only remains available;
+- OAuth is optional and does not unlock private tools yet;
+- bearer tokens are limited to the same public read-only tools as anonymous
+  clients until a separate design introduces private scopes.
+
+Refresh tokens and token revocation are intentionally not part of this model yet.
+Short-lived access tokens plus SQLite WAL persistence are sufficient for the
+current public read-only staging validation. Add revocation or refresh tokens
+only if a future private-tool design requires them.
+
 Important guarantees:
 
 - redirect URIs must match the registered allowlist
@@ -110,6 +147,7 @@ Common runtime controls:
 - `MANDATORY_PKCE`
 - `ANONYMOUS_ENABLED`
 - `ANONYMOUS_PUBLIC_TOOLS`
+- `AUTHENTICATED_SCOPE_TOOLS`
 
 ## Security Model
 
