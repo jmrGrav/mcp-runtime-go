@@ -32,6 +32,8 @@ type OAuthProxyConfig struct {
 	TrustedAuthorizeCIDRs   []string `env:"TRUSTED_AUTHORIZE_CIDRS" envDefault:"127.0.0.1/32,::1/128"`
 	MandatoryPKCE           bool     `env:"MANDATORY_PKCE" envDefault:"true"`
 	AllowTokenStoreRecovery bool     `env:"ALLOW_TOKEN_STORE_RECOVERY" envDefault:"false"`
+	AnonymousEnabled        bool     `env:"ANONYMOUS_ENABLED" envDefault:"false"`
+	AnonymousPublicTools    []string `env:"ANONYMOUS_PUBLIC_TOOLS" envDefault:""`
 }
 
 type RuntimeConfig struct {
@@ -103,6 +105,9 @@ func (c *Config) Validate() error {
 	}
 	if c.OAuthProxy.AccessTokenTTL <= 0 {
 		return fmt.Errorf("ACCESS_TOKEN_TTL must be > 0, got %d", c.OAuthProxy.AccessTokenTTL)
+	}
+	if c.OAuthProxy.AnonymousEnabled && len(c.OAuthProxy.AnonymousPublicTools) == 0 {
+		return fmt.Errorf("ANONYMOUS_PUBLIC_TOOLS must not be empty when ANONYMOUS_ENABLED=true")
 	}
 
 	return nil
