@@ -1,32 +1,15 @@
 package oauthproxy
 
-import "time"
+import "mcp-runtime-go/internal/oauthcore"
 
-type AuthCode struct {
-	RedirectURI         string
-	ExpiresAt           time.Time
-	CodeChallenge       string
-	CodeChallengeMethod string
-}
+type AuthCode = oauthcore.AuthCode
 
-type TokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in,omitempty"`
-	Scope       string `json:"scope,omitempty"`
-}
+type TokenResponse = oauthcore.TokenResponse
 
-type RegistrationRequest struct {
-	RedirectURIs []string `json:"redirect_uris"`
-}
+type RegistrationRequest = oauthcore.RegistrationRequest
 
-type RegistrationResponse struct {
-	ClientID                      string   `json:"client_id"`
-	ClientIDIssuedAt              int64    `json:"client_id_issued_at"`
-	RedirectURIs                  []string `json:"redirect_uris"`
-	GrantTypes                    []string `json:"grant_types"`
-	ResponseTypes                 []string `json:"response_types"`
-	TokenEndpointAuthMethod       string   `json:"token_endpoint_auth_method"`
-	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
-	Scope                         string   `json:"scope"`
-}
+type RegistrationResponse = oauthcore.RegistrationResponse
+
+type AuthorizeRequest = oauthcore.AuthorizeRequest
+
+type TokenExchangeRequest = oauthcore.TokenExchangeRequest

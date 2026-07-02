@@ -2,11 +2,10 @@ package oauthproxy
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"fmt"
 	"mcp-runtime-go/internal/config"
+	"mcp-runtime-go/internal/oauthcore"
 	"mcp-runtime-go/internal/observability"
 	"mcp-runtime-go/internal/security"
 	"mcp-runtime-go/internal/storage"
@@ -77,9 +76,7 @@ func NewService(cfg *config.Config, store storage.Store, audit *observability.Au
 }
 
 func (s *Service) HashToken(token string) string {
-	h := sha256.New()
-	h.Write([]byte(token))
-	return hex.EncodeToString(h.Sum(nil))
+	return oauthcore.HashToken(token)
 }
 
 func (s *Service) syncTokens() {
@@ -222,15 +219,6 @@ func (s *Service) RegisterClient(req RegistrationRequest) (*RegistrationResponse
 	return resp, nil
 }
 
-type AuthorizeRequest struct {
-	ResponseType        string
-	ClientID            string
-	RedirectURI         string
-	State               string
-	CodeChallenge       string
-	CodeChallengeMethod string
-}
-
 // IssueAuthCode validates the request and issues a new auth code.
 func (s *Service) IssueAuthCode(req AuthorizeRequest) (string, error) {
 	if req.ResponseType != "code" {
@@ -266,15 +254,6 @@ func (s *Service) IssueAuthCode(req AuthorizeRequest) (string, error) {
 	})
 
 	return code, nil
-}
-
-type TokenExchangeRequest struct {
-	GrantType    string
-	ClientID     string
-	ClientSecret string
-	RedirectURI  string
-	Code         string
-	CodeVerifier string
 }
 
 // ExchangeToken performs client authentication, code validation, and issues an access token.

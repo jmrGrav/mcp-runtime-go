@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	mcpctx "mcp-runtime-go/internal/context"
+	"mcp-runtime-go/internal/oauthcore"
 	"mcp-runtime-go/internal/observability"
 	"net/http"
 	"net/http/httputil"
@@ -166,15 +167,6 @@ func (s *Service) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type jsonRPCRequest struct {
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
-}
-
-type toolCallParams struct {
-	Name string `json:"name"`
-}
-
 func (s *Service) allowAnonymousMCPRequest(w http.ResponseWriter, r *http.Request) (allowed bool, toolsList bool) {
 	if r.Method != http.MethodPost {
 		s.auditLog(r, "anonymous_proxy_rejected", map[string]interface{}{"reason": "method_not_allowed", "method": r.Method})
@@ -202,60 +194,11 @@ func (s *Service) allowAnonymousMCPRequest(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Service) anonymousPayloadAllowed(body []byte) (allowed bool, toolsList bool, reason string) {
-	var batch []json.RawMessage
-	if err := json.Unmarshal(body, &batch); err == nil {
-		if len(batch) == 0 {
-			return false, false, "empty_batch"
-		}
-		containsToolsList := false
-		for _, raw := range batch {
-			ok, isToolsList, reason := s.anonymousMessageAllowed(raw)
-			if !ok {
-				return false, false, reason
-			}
-			containsToolsList = containsToolsList || isToolsList
-		}
-		return true, containsToolsList, ""
-	}
-
-	return s.anonymousMessageAllowed(body)
-}
-
-func (s *Service) anonymousMessageAllowed(raw []byte) (allowed bool, toolsList bool, reason string) {
-	var msg jsonRPCRequest
-	if err := json.Unmarshal(raw, &msg); err != nil {
-		return false, false, "invalid_json"
-	}
-
-	switch msg.Method {
-	case "initialize", "notifications/initialized", "ping":
-		return true, false, ""
-	case "tools/list":
-		return true, true, ""
-	case "tools/call":
-		var params toolCallParams
-		if err := json.Unmarshal(msg.Params, &params); err != nil {
-			return false, false, "invalid_tool_call_params"
-		}
-		if params.Name == "" {
-			return false, false, "missing_tool_name"
-		}
-		if s.isAnonymousPublicTool(params.Name) {
-			return true, false, ""
-		}
-		return false, false, "tool_not_public"
-	default:
-		return false, false, "method_not_public"
-	}
+	return oauthcore.AnonymousMCPPolicy{PublicTools: s.cfg.OAuthProxy.AnonymousPublicTools}.PayloadAllowed(body)
 }
 
 func (s *Service) isAnonymousPublicTool(name string) bool {
-	for _, tool := range s.cfg.OAuthProxy.AnonymousPublicTools {
-		if tool == name {
-			return true
-		}
-	}
-	return false
+	return oauthcore.AnonymousMCPPolicy{PublicTools: s.cfg.OAuthProxy.AnonymousPublicTools}.IsPublicTool(name)
 }
 
 func (s *Service) filterAnonymousToolsListResponse(resp *http.Response) error {
