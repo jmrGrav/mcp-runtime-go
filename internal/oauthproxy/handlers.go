@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	mcpctx "mcp-runtime-go/internal/context"
+	"mcp-runtime-go/internal/oauthcore"
 	"mcp-runtime-go/internal/observability"
 	"mcp-runtime-go/internal/security"
 	"net/http"
 	"net/url"
-	"strings"
 )
 
 func (s *Service) auditLog(r *http.Request, event string, fields map[string]interface{}) {
@@ -32,18 +32,7 @@ func (s *Service) HandleMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auditLog(r, "metadata_served", nil)
-	data := map[string]interface{}{
-		"issuer":                                s.cfg.OAuthProxy.ProxyBaseURL,
-		"authorization_endpoint":                fmt.Sprintf("%s/authorize", s.cfg.OAuthProxy.ProxyBaseURL),
-		"token_endpoint":                        fmt.Sprintf("%s/token", s.cfg.OAuthProxy.ProxyBaseURL),
-		"registration_endpoint":                 fmt.Sprintf("%s/register", s.cfg.OAuthProxy.ProxyBaseURL),
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code"},
-		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": []string{"none", "client_secret_post"},
-		"scopes_supported":                      []string{mcpScope},
-		"service_documentation":                 mcpServiceURL(s.cfg.OAuthProxy.ProxyBaseURL),
-	}
+	data := oauthcore.AuthorizationServerMetadata(s.oauthCoreConfig())
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
 }
@@ -55,15 +44,17 @@ func (s *Service) HandleProtectedResourceMetadata(w http.ResponseWriter, r *http
 		return
 	}
 	s.auditLog(r, "resource_metadata_served", nil)
-	data := map[string]interface{}{
-		"resource":                 mcpServiceURL(s.cfg.OAuthProxy.ProxyBaseURL),
-		"authorization_servers":    []string{s.cfg.OAuthProxy.ProxyBaseURL},
-		"bearer_methods_supported": []string{"header"},
-		"scopes_supported":         []string{mcpScope},
-		"resource_documentation":   mcpServiceURL(s.cfg.OAuthProxy.ProxyBaseURL),
-	}
+	data := oauthcore.ProtectedResourceMetadata(s.oauthCoreConfig())
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+func (s *Service) oauthCoreConfig() oauthcore.Config {
+	return oauthcore.Config{
+		Issuer:          s.cfg.OAuthProxy.ProxyBaseURL,
+		Resource:        mcpServiceURL(s.cfg.OAuthProxy.ProxyBaseURL),
+		ScopesSupported: []string{mcpScope},
+	}
 }
 
 func (s *Service) HandleRegister(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +137,7 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.auditLog(r, "authorize_rejected", map[string]interface{}{"reason": err.Error()})
 		// Redirect with RFC-standard error code (redirect_uri and client_id already validated).
-		rfcErr, rfcDesc := mapAuthorizeError(err)
+		rfcErr, rfcDesc := oauthcore.MapAuthorizeError(err)
 		params := url.Values{}
 		params.Set("error", rfcErr)
 		if rfcDesc != "" {
@@ -197,7 +188,7 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.auditLog(r, "token_rejected", map[string]interface{}{"reason": err.Error()})
 		observability.TokensRejectedTotal.Inc()
-		rfcErr, status := mapTokenError(err)
+		rfcErr, status := oauthcore.MapTokenError(err)
 		writeTokenError(w, rfcErr, "", status)
 		return
 	}
@@ -231,34 +222,4 @@ func writeTokenError(w http.ResponseWriter, errCode, desc string, status int) {
 		body["error_description"] = desc
 	}
 	json.NewEncoder(w).Encode(body)
-}
-
-// mapAuthorizeError maps internal IssueAuthCode errors to RFC 6749 §4.1.2.1 error codes.
-func mapAuthorizeError(err error) (code, description string) {
-	msg := err.Error()
-	switch {
-	case strings.HasPrefix(msg, "unsupported_response_type"):
-		return "unsupported_response_type", ""
-	case strings.HasPrefix(msg, "invalid_request"):
-		return "invalid_request", strings.TrimPrefix(msg, "invalid_request: ")
-	default:
-		return "invalid_request", msg
-	}
-}
-
-// mapTokenError maps ExchangeToken errors to RFC 6749 §5.2 error codes and HTTP status.
-func mapTokenError(err error) (code string, status int) {
-	msg := err.Error()
-	switch {
-	case strings.HasPrefix(msg, "unsupported_grant_type"):
-		return "unsupported_grant_type", http.StatusBadRequest
-	case strings.HasPrefix(msg, "invalid_client"):
-		return "invalid_client", http.StatusUnauthorized
-	case strings.HasPrefix(msg, "invalid_grant"):
-		return "invalid_grant", http.StatusBadRequest
-	case strings.HasPrefix(msg, "server_error"):
-		return "server_error", http.StatusInternalServerError
-	default:
-		return "invalid_request", http.StatusBadRequest
-	}
 }

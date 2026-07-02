@@ -217,6 +217,77 @@ func TestHandleProxy_AuthFailures(t *testing.T) {
 	})
 }
 
+func TestHandleProxy_LegacyDefaultOAuthProxyBehaviorUnchanged(t *testing.T) {
+	var backendHits int
+	var gotPath, gotAuth, gotHost string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendHits++
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotHost = r.Host
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			HugoMCPURL:   backend.URL + "/api/mcp",
+			HugoToken:    "backend-token",
+			HugoHost:     "hugo-backend.internal",
+			ClientID:     "hugo-mcp",
+			ProxyBaseURL: "https://auth.example.test",
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+	s, _ := NewService(cfg, store, audit, nil)
+
+	t.Run("anonymous remains disabled by default", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+		rr := httptest.NewRecorder()
+
+		s.HandleProxy(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for anonymous default, got %d", rr.Code)
+		}
+		if backendHits != 0 {
+			t.Fatalf("expected backend not to be reached without bearer, got %d hits", backendHits)
+		}
+		if got := rr.Header().Get("WWW-Authenticate"); !strings.Contains(got, `Bearer realm="https://auth.example.test"`) {
+			t.Fatalf("unexpected WWW-Authenticate header: %q", got)
+		}
+	})
+
+	t.Run("valid bearer still proxies to configured Hugo backend with backend token", func(t *testing.T) {
+		if err := s.AddAccessToken("valid-token", time.Now().Add(time.Hour)); err != nil {
+			t.Fatalf("AddAccessToken failed: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/mcp/tools", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		rr := httptest.NewRecorder()
+
+		s.HandleProxy(rr, req)
+
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("expected backend status 204, got %d", rr.Code)
+		}
+		if backendHits != 1 {
+			t.Fatalf("expected one backend hit, got %d", backendHits)
+		}
+		if gotPath != "/api/mcp/tools" {
+			t.Fatalf("backend path = %q, want /api/mcp/tools", gotPath)
+		}
+		if gotAuth != "Bearer backend-token" {
+			t.Fatalf("backend Authorization = %q", gotAuth)
+		}
+		if gotHost != "hugo-backend.internal" {
+			t.Fatalf("backend Host = %q", gotHost)
+		}
+	})
+}
+
 func TestHandleProxy_AnonymousReadOnlyTools(t *testing.T) {
 	var backendHits int
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

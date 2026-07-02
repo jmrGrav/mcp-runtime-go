@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"mcp-runtime-go/internal/config"
+	"mcp-runtime-go/internal/oauthcore"
 	"mcp-runtime-go/internal/observability"
 	"mcp-runtime-go/internal/storage"
 	"net/http"
@@ -484,10 +485,10 @@ func TestExchangeToken_Errors(t *testing.T) {
 }
 
 func TestMapErrorDefaults(t *testing.T) {
-	if code, desc := mapAuthorizeError(fmt.Errorf("unexpected")); code != "invalid_request" || desc != "unexpected" {
+	if code, desc := oauthcore.MapAuthorizeError(fmt.Errorf("unexpected")); code != "invalid_request" || desc != "unexpected" {
 		t.Fatalf("unexpected authorize mapping: %s %q", code, desc)
 	}
-	if code, status := mapTokenError(fmt.Errorf("unexpected")); code != "invalid_request" || status != http.StatusBadRequest {
+	if code, status := oauthcore.MapTokenError(fmt.Errorf("unexpected")); code != "invalid_request" || status != http.StatusBadRequest {
 		t.Fatalf("unexpected token mapping: %s %d", code, status)
 	}
 }
