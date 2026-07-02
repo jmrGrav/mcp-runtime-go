@@ -36,6 +36,27 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoad_AnonymousMCPConfig(t *testing.T) {
+	t.Setenv("CLIENT_ID", "test-client")
+	t.Setenv("CLIENT_SECRET", "test-secret")
+	t.Setenv("HUGO_TOKEN", "test-token")
+	t.Setenv("ANONYMOUS_ENABLED", "true")
+	t.Setenv("ANONYMOUS_PUBLIC_TOOLS", "search_posts, read_page")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if !cfg.OAuthProxy.AnonymousEnabled {
+		t.Fatal("expected anonymous mode to be enabled")
+	}
+	want := []string{"search_posts", "read_page"}
+	if !reflect.DeepEqual(cfg.OAuthProxy.AnonymousPublicTools, want) {
+		t.Fatalf("anonymous public tools = %#v, want %#v", cfg.OAuthProxy.AnonymousPublicTools, want)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -173,6 +194,22 @@ func TestValidate(t *testing.T) {
 				OAuthProxy: OAuthProxyConfig{
 					ClientID:     "id",
 					ClientSecret: "secret",
+				},
+			},
+			true,
+		},
+		{
+			"Anonymous enabled without public tools",
+			Config{
+				OAuthProxy: OAuthProxyConfig{
+					ClientID:         "id",
+					ClientSecret:     "secret",
+					HugoToken:        "token",
+					HugoMCPURL:       "http://127.0.0.1/api/mcp",
+					ProxyBaseURL:     "https://example.com",
+					AuthCodeTTL:      300,
+					AccessTokenTTL:   86400,
+					AnonymousEnabled: true,
 				},
 			},
 			true,

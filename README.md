@@ -20,6 +20,7 @@ systemctl status mcp-runtime --no-pager
 - OAuth 2.0 Authorization Code + PKCE
 - Dynamic Client Registration
 - Authenticated MCP reverse proxy
+- Optional anonymous read-only MCP mode with an explicit public tool allowlist
 - SQLite WAL token storage
 - Structured audit logging
 - `/healthz`, `/readyz`, and loopback metrics
@@ -57,6 +58,8 @@ Common settings:
 - `USE_SQLITE=true`
 - `TOKENS_DB=/var/lib/mcp-runtime-go/tokens.db`
 - `AUDIT_LOG_FILE=/var/log/mcp-runtime-go/audit.jsonl`
+- `ANONYMOUS_ENABLED=false`
+- `ANONYMOUS_PUBLIC_TOOLS=search_pages,get_page`
 
 Legacy `GRAV_*` variables remain compatibility fallbacks only.
 

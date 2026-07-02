@@ -47,6 +47,28 @@ Claude.ai
 4. `/token` exchanges the authorization code for an access token.
 5. `/mcp` proxies authenticated requests to the Hugo backend.
 
+## Optional Anonymous MCP Mode
+
+By default, `/mcp` remains authenticated and requires a valid bearer token.
+
+When `ANONYMOUS_ENABLED=true`, the proxy accepts unauthenticated MCP JSON-RPC
+requests only for a narrow public surface:
+
+- protocol setup methods: `initialize`, `notifications/initialized`, `ping`
+- `tools/list`
+- `tools/call` only when `params.name` appears in `ANONYMOUS_PUBLIC_TOOLS`
+
+Invalid bearer tokens are still rejected with `401`; anonymous fallback is only
+available when no `Authorization` header is present.
+
+Anonymous `tools/list` responses are filtered so only tools named in
+`ANONYMOUS_PUBLIC_TOOLS` are advertised to anonymous clients. The filter supports
+plain JSON-RPC responses and server-sent event `data:` JSON payloads.
+
+This mode is intended for public read-only MCP servers. It must not be used in
+front of a backend that exposes write or administrative tools unless every
+publicly callable tool is intentionally allowlisted and tested.
+
 Important guarantees:
 
 - redirect URIs must match the registered allowlist
@@ -86,6 +108,8 @@ Common runtime controls:
 - `AUDIT_LOG_FILE`
 - `TRUSTED_PROXIES`
 - `MANDATORY_PKCE`
+- `ANONYMOUS_ENABLED`
+- `ANONYMOUS_PUBLIC_TOOLS`
 
 ## Security Model
 

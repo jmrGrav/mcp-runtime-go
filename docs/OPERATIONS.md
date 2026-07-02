@@ -38,8 +38,33 @@ Common production settings:
 - `TRUSTED_PROXIES=127.0.0.1,::1`
 - `MANDATORY_PKCE=true`
 - `ALLOW_TOKEN_STORE_RECOVERY=false`
+- `ANONYMOUS_ENABLED=false`
+- `ANONYMOUS_PUBLIC_TOOLS=`
 
 Legacy `GRAV_*` variables are supported only as compatibility fallback.
+
+## Optional Anonymous Read-Only Mode
+
+Anonymous MCP access is disabled by default.
+
+Enable it only for public read-only MCP backends:
+
+```bash
+ANONYMOUS_ENABLED=true
+ANONYMOUS_PUBLIC_TOOLS=search_pages,get_page,list_pages
+```
+
+Behavior:
+
+- no `Authorization` header: allowed only for protocol setup, `tools/list`, and
+  `tools/call` names present in `ANONYMOUS_PUBLIC_TOOLS`;
+- anonymous `tools/list`: response is filtered to advertise only
+  `ANONYMOUS_PUBLIC_TOOLS`;
+- invalid `Authorization: Bearer ...`: always rejected with `401`;
+- valid bearer token: authenticated proxy behavior is unchanged.
+
+Do not enable this mode in front of an administrative MCP backend unless every
+write-capable tool is excluded from the public allowlist and separately tested.
 
 ## Systemd
 

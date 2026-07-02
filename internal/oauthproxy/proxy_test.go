@@ -1,6 +1,7 @@
 package oauthproxy
 
 import (
+	"bytes"
 	"mcp-runtime-go/internal/config"
 	mcpctx "mcp-runtime-go/internal/context"
 	"mcp-runtime-go/internal/observability"
@@ -214,6 +215,160 @@ func TestHandleProxy_AuthFailures(t *testing.T) {
 			t.Fatalf("expected 401, got %d", rr.Code)
 		}
 	})
+}
+
+func TestHandleProxy_AnonymousReadOnlyTools(t *testing.T) {
+	var backendHits int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendHits++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+	}))
+	defer backend.Close()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			HugoMCPURL:           backend.URL,
+			HugoToken:            "test-token",
+			ClientID:             "hugo-mcp",
+			AnonymousEnabled:     true,
+			AnonymousPublicTools: []string{"search_posts", "read_page"},
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+	s, _ := NewService(cfg, store, audit, nil)
+
+	t.Run("public tool is proxied without bearer token", func(t *testing.T) {
+		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_posts","arguments":{"q":"hugo"}}}`)
+		req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+
+		s.HandleProxy(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+		}
+		if backendHits != 1 {
+			t.Fatalf("expected backend to be hit once, got %d", backendHits)
+		}
+	})
+
+	t.Run("non public tool is rejected without reaching backend", func(t *testing.T) {
+		before := backendHits
+		body := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"publish_post","arguments":{}}}`)
+		req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+
+		s.HandleProxy(rr, req)
+
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+		}
+		if backendHits != before {
+			t.Fatalf("backend was hit for forbidden anonymous tool")
+		}
+	})
+
+	t.Run("invalid bearer is rejected even when anonymous is enabled", func(t *testing.T) {
+		before := backendHits
+		body := []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_posts","arguments":{}}}`)
+		req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer invalid-token")
+		rr := httptest.NewRecorder()
+
+		s.HandleProxy(rr, req)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+		}
+		if backendHits != before {
+			t.Fatalf("backend was hit for invalid bearer")
+		}
+	})
+}
+
+func TestHandleProxy_AnonymousToolsListFiltersProtectedTools(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_posts"},{"name":"publish_post"}]}}`))
+	}))
+	defer backend.Close()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			HugoMCPURL:           backend.URL,
+			HugoToken:            "test-token",
+			ClientID:             "hugo-mcp",
+			AnonymousEnabled:     true,
+			AnonymousPublicTools: []string{"search_posts"},
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+	s, _ := NewService(cfg, store, audit, nil)
+
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	s.HandleProxy(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"search_posts"`) {
+		t.Fatalf("public tool missing from response: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "publish_post") {
+		t.Fatalf("protected tool leaked in anonymous tools/list: %s", rr.Body.String())
+	}
+}
+
+func TestHandleProxy_AnonymousToolsListFiltersServerSentEvents(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("event: message\n"))
+		w.Write([]byte(`data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search_posts"},{"name":"publish_post"}]}}` + "\n\n"))
+	}))
+	defer backend.Close()
+
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		OAuthProxy: config.OAuthProxyConfig{
+			HugoMCPURL:           backend.URL,
+			HugoToken:            "test-token",
+			ClientID:             "hugo-mcp",
+			AnonymousEnabled:     true,
+			AnonymousPublicTools: []string{"search_posts"},
+		},
+	}
+	audit := observability.NewAuditLogger(filepath.Join(tmpDir, "audit.log"))
+	store := storage.NewTokenStore(filepath.Join(tmpDir, "tokens.json"), false)
+	s, _ := NewService(cfg, store, audit, nil)
+
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	s.HandleProxy(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"search_posts"`) {
+		t.Fatalf("public tool missing from SSE response: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "publish_post") {
+		t.Fatalf("protected tool leaked in anonymous SSE tools/list: %s", rr.Body.String())
+	}
 }
 
 func TestHandleProxy_BackendMissing(t *testing.T) {
